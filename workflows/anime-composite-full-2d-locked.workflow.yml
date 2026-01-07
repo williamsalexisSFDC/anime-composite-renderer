@@ -1,7 +1,11 @@
 workflow:
   name: ANIME_COMPOSITE__FULL_2D_LOCKED
-  version: 2.0
+  version: 2.1
 
+# ─────────────────────────────────────────────
+# RUNTIME CONTEXT
+# These values change per execution (book/arc/chapter)
+# ─────────────────────────────────────────────
 context:
   # These are “runtime knobs” you set per run (or load from configs below).
   book_ref: configs/books/v1-book1.tokyo-kyoto-osaka-nara.yml
@@ -9,7 +13,14 @@ context:
   chapter_id: DAY_01
   time_of_day: EVENING
 
+# ─────────────────────────────────────────────
+# GLOBAL POLICIES
+# Single source of truth for style, environment, and character rules
+# ─────────────────────────────────────────────
 policies:
+
+  # ── STYLE POLICY ────────────────────────────
+  # Defines the immutable visual contract for the workflow
   style:
     style_id: FULL_2D_MAPPA_ADJACENT
     rendering: HAND_DRAWN
@@ -17,12 +28,16 @@ policies:
     linework: CLEAN
     edge_policy: HARD_EDGES
     global_variance_budget: LOW
+
+    # Disallowed rendering styles (hard stop)
     disallow_style:
       - PHOTOREALISM
       - PAINTERLY
       - COLLAGE
       - HYBRID
       - CGI_3D
+
+    # Render-time guards applied to every page
     render_guards:
       style_hard_lock: CRISP_CEL
       disallow_style:
@@ -35,8 +50,12 @@ policies:
         match_reference: true
         no_youthening: true
 
+  # ── ENVIRONMENT / IP POLICY ─────────────────
+  # Centralized IP, signage, and architecture protection
   environment:
     interpretation: STYLIZED_NARRATIVE
+
+    # Anything listed here must NEVER appear in final renders
     disallow:
       - EXACT_REPLICA
       - ANY_LOGOS
@@ -49,16 +68,22 @@ policies:
       - AIRLINE_LIVERIES
       - TAIL_LOGOS
       - BRAND_WORDMARKS
+
+    # Allowed abstraction strategies
     allow:
       - ABSTRACTED_FORMS
       - SIMPLIFIED_SYMBOLS
       - INTERPRETIVE_COMPOSITION
       - TYPOGRAPHIC_OVERLAYS
+
+    # Default replacements when real-world detail is suppressed
     replace_with_defaults:
       - GENERIC_AIRPORT_FORMS
       - ABSTRACT_MURAL_SHAPES
       - NONDESCRIPT_SIGNAGE_GLYPHS
 
+  # ── CHARACTER LOCK POLICY ───────────────────
+  # Prevents identity drift after the start page
   character_lock:
     disallow:
       - FACE_SHAPE_CHANGE
@@ -69,8 +94,13 @@ policies:
       - POSE
       - EXPRESSION
 
+# ─────────────────────────────────────────────
+# VALIDATION PROFILES
+# Swappable enforcement profiles per book/arc
+# ─────────────────────────────────────────────
 validate_profiles:
-  # 2) Per-book validation profiles (Book 1 vs Cherry Blossom 2027)
+
+  # Book 1: strict IP + architecture enforcement
   v1_book1_strict_ip:
     checks:
       ip_compliance_forbid:
@@ -96,6 +126,7 @@ validate_profiles:
         - CGI_3D
         - PAINTERLY
 
+  # Book 2: Cherry Blossom Journey (softer environment)
   v2_cherry_blossom_soft_tone:
     checks:
       ip_compliance_forbid:
@@ -120,8 +151,11 @@ validate_profiles:
     relaxations:
       allow_environment_abstraction_only: true
 
+# ─────────────────────────────────────────────
+# REUSABLE VALIDATION STEP
+# Enforces that inherited policies were honored at runtime
+# ─────────────────────────────────────────────
 validate_reuse:
-  # 1) Formalize VALIDATE once and reuse across render steps
   default_validate_step:
     type: VALIDATE
     inherits_policies:
@@ -129,7 +163,7 @@ validate_reuse:
       - policies.environment
       - policies.character_lock
 
-    # 2) Fail-softly behavior
+    # Soft-fail strategy: tighten abstraction and retry once
     on_fail:
       mode: SOFT_FAIL_THEN_RETRY        # HARD_FAIL | SOFT_FAIL_THEN_RETRY
       max_retries: 1
@@ -148,9 +182,14 @@ validate_reuse:
             background_complexity: LOWER
             preserve_character_detail: true
 
+# ─────────────────────────────────────────────
+# PIPELINE STEPS
+# Ordered execution model
+# ─────────────────────────────────────────────
 steps:
   # ─────────────────────────────────────────────
   # STEP 1 — Assert Base Style (STATE ONLY)
+  # Prevents silent style drift across the chapter
   # ─────────────────────────────────────────────
   - id: STEP_1_ASSERT_STYLE_STATE
     type: STATE_ONLY
@@ -159,6 +198,7 @@ steps:
 
   # ─────────────────────────────────────────────
   # STEP 2 — Create Chapter Start Page (RENDER)
+  # Establishes tone, typography, and visual anchor
   # ─────────────────────────────────────────────
   - id: STEP_2_CREATE_START_PAGE
     type: RENDER
@@ -171,6 +211,7 @@ steps:
       purpose: CHAPTER_INTRO
       style_source: CANONICAL
 
+    # TEXT SYSTEM: auto-generated, layout-locked
     text:
       enabled: true
       authority:
@@ -198,15 +239,16 @@ steps:
           placement: ROUGH_PAPER_BOX_BOTTOM_LEFT
           style: BOLD_MANGA_DISPLAY
 
+    # COLOR & LIGHTING
     color:
       mode: FULL_COLOR
       palette: ANIME_CEL_COLOR
-
     lighting:
       profile: WARM_GOLDEN_HOUR
       rim_light: SOFT_BACKLIGHT
       color_depth: SLIGHTLY_ENHANCED
 
+    # DETAIL PRIORITIZATION
     detail:
       priority_order: [FACE, HAIR, GLASSES, CLOTHING, ENVIRONMENT]
       hair:
@@ -217,15 +259,14 @@ steps:
       line_density: MEDIUM_HIGH
       micro_detail: [FABRIC_WRINKLES, HAIR_OVERLAP, GLASS_REFLECTION]
 
+    # ENVIRONMENT HANDLING (mood only, no exact replication)
     environment:
       use: MOOD_ONLY
       simplification: HIGH
-      replace_with: *ref_replace_with_defaults   # optional if your YAML processor supports anchors; otherwise inline list
-      # If anchors aren’t supported in your tooling, replace with:
-      # replace_with:
-      #   - GENERIC_AIRPORT_FORMS
-      #   - ABSTRACT_MURAL_SHAPES
-      #   - NONDESCRIPT_SIGNAGE_GLYPHS
+      replace_with:
+        - GENERIC_AIRPORT_FORMS
+        - ABSTRACT_MURAL_SHAPES
+        - NONDESCRIPT_SIGNAGE_GLYPHS
 
   # ─────────────────────────────────────────────
   # STEP 3 — Lock Characters to Start Page (STATE ONLY)
@@ -273,6 +314,7 @@ steps:
 
     style_guards_from_policy: policies.style.render_guards
 
+  # STEP 5A — Validate Narrative Page
   - id: STEP_5A_VALIDATE_MANGA_PAGE
     uses: validate_reuse.default_validate_step
     target: STEP_5_GENERATE_MANGA_PAGE
@@ -300,6 +342,7 @@ steps:
 
     style_guards_from_policy: policies.style.render_guards
 
+  # STEP 6A — Validate Filler Page
   - id: STEP_6A_VALIDATE_FILLER_PAGE
     uses: validate_reuse.default_validate_step
     target: STEP_6_GENERATE_FILLER_PAGE
@@ -326,6 +369,7 @@ steps:
 
     style_guards_from_policy: policies.style.render_guards
 
+  # STEP 7A — Validate End Page
   - id: STEP_7A_VALIDATE_END_PAGE
     uses: validate_reuse.default_validate_step
     target: STEP_7_CREATE_END_PAGE
