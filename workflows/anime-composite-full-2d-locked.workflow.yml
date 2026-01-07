@@ -20,7 +20,7 @@
 
 name: ANIME_COMPOSITE__FULL_2D_LOCKED
 
-on:
+"on":
   workflow_dispatch:
     inputs:
       config_book:
@@ -59,6 +59,15 @@ on:
         description: "Chapter identifier for outputs"
         required: true
         default: "tokyo-ward-01"
+      enable_impact_page:
+        description: "true = render optional Impact Page (sandbox_readonly, does not affect continuity)"
+        required: true
+        default: "false"
+      impact_validate_profile:
+        description: "Optional override validate profile for Impact Page (blank = use default_validate_profile)"
+        required: false
+        default: ""
+
 
 env:
   # Global retry policy (validate jobs use this)
@@ -69,6 +78,8 @@ env:
   CONFIG_ARC: ${{ inputs.config_arc }}
   VALIDATION_PROFILES_FILE: ${{ inputs.validation_profiles }}
   VALIDATE_PROFILE: ${{ inputs.default_validate_profile }}
+  ENABLE_IMPACT_PAGE: ${{ inputs.enable_impact_page }}
+  IMPACT_VALIDATE_PROFILE: ${{ inputs.impact_validate_profile }}
 
   # Runtime knobs
   TEXT_LANGUAGE_MODE: ${{ inputs.text_language_mode }}
@@ -251,6 +262,105 @@ jobs:
         with:
           name: start-page-final
           path: out/start-page/validated/final.png
+      
+      - name: Normalize START PAGE final filename
+        run: |
+          cp out/start-page/validated/final.png out/start-page/validated/start-page.final.png
+  
+  # ─────────────────────────────────────────────
+  # RENDER — IMPACT PAGE (Attempt 1 + retry)
+  # Purpose: Optional dramatic impact frame (sandbox_readonly, does not affect continuity)
+  # Depends on: validated start page (hard gate)
+  # ─────────────────────────────────────────────
+  render_impact_page:
+    name: Render — Impact Page (Attempt 1 / sandbox_readonly)
+    runs-on: ubuntu-latest
+    needs: [validate_start_page]
+    if: env.ENABLE_IMPACT_PAGE == 'true'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Render IMPACT PAGE (Attempt 1)
+        env:
+          EFFECTIVE_PROFILE: ${{ env.IMPACT_VALIDATE_PROFILE }}
+        run: |
+          mkdir -p out/impact-page
+
+          # If IMPACT_VALIDATE_PROFILE is blank, fall back to VALIDATE_PROFILE
+          if [ -z "$EFFECTIVE_PROFILE" ]; then
+            EFFECTIVE_PROFILE="$VALIDATE_PROFILE"
+          fi
+
+          renderer render-specialty-page \
+            --specialty impact_frame \
+            --render-mode sandbox_readonly \
+            --book "$CONFIG_BOOK" \
+            --arc "$CONFIG_ARC" \
+            --profiles "$VALIDATION_PROFILES_FILE" \
+            --profile "$EFFECTIVE_PROFILE" \
+            --out "out/impact-page/impact-page.attempt1.png"
+
+      - name: Upload IMPACT PAGE (attempt1)
+        uses: actions/upload-artifact@v4
+        with:
+          name: impact-page-attempt1
+          path: out/impact-page/impact-page.attempt1.png
+
+  validate_impact_page:
+    name: Validate — Impact Page (scripted retry)
+    runs-on: ubuntu-latest
+    needs: [render_impact_page]
+    if: env.ENABLE_IMPACT_PAGE == 'true'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download IMPACT PAGE (attempt1)
+        uses: actions/download-artifact@v4
+        with:
+          name: impact-page-attempt1
+          path: out/impact-page
+
+      - name: VALIDATE + Retry (IMPACT PAGE)
+        env:
+          # Use override if provided; else fall back to default
+          VALIDATION_PROFILES_FILE: ${{ env.VALIDATION_PROFILES_FILE }}
+          VALIDATE_PROFILE: ${{ env.VALIDATE_PROFILE }}
+          FAIL_SOFTLY: ${{ env.FAIL_SOFTLY }}
+          MAX_RETRIES: ${{ env.MAX_RETRIES }}
+
+          ATTEMPT1_IMAGE: out/impact-page/impact-page.attempt1.png
+          OUT_DIR: out/impact-page/validated
+          ATTEMPT2_IMAGE: out/impact-page/validated/attempt2.png
+
+          # NOTE: we keep overrides minimal and impact-specific.
+          # The specialty definition itself should enforce monochrome/high-contrast.
+          RERENDER_CMD: >
+            renderer render-specialty-page
+            --specialty impact_frame
+            --render-mode sandbox_readonly
+            --book "$CONFIG_BOOK"
+            --arc "$CONFIG_ARC"
+            --profiles "$VALIDATION_PROFILES_FILE"
+            --profile "${IMPACT_VALIDATE_PROFILE:-$VALIDATE_PROFILE}"
+            --override "color_mode=MONOCHROME_HIGH_CONTRAST"
+            --override "contrast=VERY_HIGH"
+            --override "motion_language=DENSE_SPEED_LINES,INK_BURSTS,ABSTRACT_MOTION_BG"
+            --out "out/impact-page/validated/attempt2.png"
+        run: |
+          # Resolve profile override (bash parameter expansion won't occur inside env string above)
+          export VALIDATE_PROFILE="${IMPACT_VALIDATE_PROFILE:-$VALIDATE_PROFILE}"
+
+          chmod +x tools/validate_and_retry.sh
+          tools/validate_and_retry.sh
+
+      - name: Upload IMPACT PAGE final
+        uses: actions/upload-artifact@v4
+        with:
+          name: impact-page-final
+          path: out/impact-page/validated/final.png
+
 
   # ─────────────────────────────────────────────
   # RENDER — NARRATIVE PAGE (Attempt 1 only)
@@ -377,50 +487,50 @@ jobs:
   # Publishes: filler-page-final
   # ─────────────────────────────────────────────
   validate_filler_page:
-  runs-on: ubuntu-latest
-  needs: [render_filler_page]
-  steps:
-    - name: Checkout
-      uses: actions/checkout@v4
+    runs-on: ubuntu-latest
+    needs: [render_filler_page]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
 
-    - name: Download FILLER PAGE (attempt1)
-      uses: actions/download-artifact@v4
-      with:
-        name: filler-page-attempt1
-        path: out/filler-page
+      - name: Download FILLER PAGE (attempt1)
+        uses: actions/download-artifact@v4
+        with:
+          name: filler-page-attempt1
+          path: out/filler-page
 
-    # ✅ Centralized validate+retry logic (script)
-    - name: VALIDATE + Retry (FILLER PAGE)
-      env:
-        VALIDATION_PROFILES_FILE: ${{ env.VALIDATION_PROFILES_FILE }}
-        VALIDATE_PROFILE: ${{ env.VALIDATE_PROFILE }}
-        FAIL_SOFTLY: ${{ env.FAIL_SOFTLY }}
-        MAX_RETRIES: ${{ env.MAX_RETRIES }}
+      # ✅ Centralized validate+retry logic (script)
+      - name: VALIDATE + Retry (FILLER PAGE)
+        env:
+          VALIDATION_PROFILES_FILE: ${{ env.VALIDATION_PROFILES_FILE }}
+          VALIDATE_PROFILE: ${{ env.VALIDATE_PROFILE }}
+          FAIL_SOFTLY: ${{ env.FAIL_SOFTLY }}
+          MAX_RETRIES: ${{ env.MAX_RETRIES }}
 
-        ATTEMPT1_IMAGE: out/filler-page/filler-page.attempt1.png
-        OUT_DIR: out/filler-page/validated
-        ATTEMPT2_IMAGE: out/filler-page/validated/attempt2.png
+          ATTEMPT1_IMAGE: out/filler-page/filler-page.attempt1.png
+          OUT_DIR: out/filler-page/validated
+          ATTEMPT2_IMAGE: out/filler-page/validated/attempt2.png
 
-        RERENDER_CMD: >
-          renderer generate-filler-page
-          --book "$CONFIG_BOOK"
-          --arc "$CONFIG_ARC"
-          --profiles "$VALIDATION_PROFILES_FILE"
-          --profile "$VALIDATE_PROFILE"
-          --override "CAPTION_VARIANCE=NONE"
-          --override "ALLOW_REAL_PLACE_NAMES=FALSE"
-          --override "ENVIRONMENT_SIMPLIFICATION=VERY_HIGH"
-          --override "NO_YOUTHENING=TRUE"
-          --out "out/filler-page/validated/attempt2.png"
-      run: |
-        chmod +x tools/validate_and_retry.sh
-        tools/validate_and_retry.sh
+          RERENDER_CMD: >
+            renderer generate-filler-page
+            --book "$CONFIG_BOOK"
+            --arc "$CONFIG_ARC"
+            --profiles "$VALIDATION_PROFILES_FILE"
+            --profile "$VALIDATE_PROFILE"
+            --override "CAPTION_VARIANCE=NONE"
+            --override "ALLOW_REAL_PLACE_NAMES=FALSE"
+            --override "ENVIRONMENT_SIMPLIFICATION=VERY_HIGH"
+            --override "NO_YOUTHENING=TRUE"
+            --out "out/filler-page/validated/attempt2.png"
+        run: |
+          chmod +x tools/validate_and_retry.sh
+          tools/validate_and_retry.sh
 
-    - name: Upload FILLER PAGE final
-      uses: actions/upload-artifact@v4
-      with:
-        name: filler-page-final
-        path: out/filler-page/validated/final.png
+      - name: Upload FILLER PAGE final
+        uses: actions/upload-artifact@v4
+        with:
+          name: filler-page-final
+          path: out/filler-page/validated/final.png
 
   # ─────────────────────────────────────────────
   # RENDER — END PAGE (Attempt 1 only)
