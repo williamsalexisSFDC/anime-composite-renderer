@@ -1,0 +1,10 @@
+arc:
+  id: okinawa
+  visual_profile: TROPICAL_COASTAL
+  palette_bias: WARM_AQUA + SUNLIT
+  lighting_temperature: WARM_DAYLIGHT
+  background_complexity: MEDIUM
+  environment_replace_with:
+    - GENERIC_BEACH_FORMS
+    - ABSTRACT_CORAL_SHAPES
+    - NONDESCRIPT_SIGNAGE_GLYPHS

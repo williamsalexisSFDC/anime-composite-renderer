@@ -1,0 +1,15 @@
+book:
+  id: v2-cherry-blossom-2027
+  title: Cherry Blossom Journey — Book 2
+  year: 2027
+  default_validate_profile: v2_cherry_blossom_soft_tone
+  memory:
+    style_memory: PERSISTENT_PER_BOOK
+    character_memory: PERSISTENT_PER_BOOK
+  arcs:
+    - tokyo
+    - fuji
+    - nagano
+    - kyoto
+    - osaka
+    - okinawa

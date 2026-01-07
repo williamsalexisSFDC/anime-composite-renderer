@@ -1,0 +1,332 @@
+workflow:
+  name: ANIME_COMPOSITE__FULL_2D_LOCKED
+  version: 2.0
+
+context:
+  # These are “runtime knobs” you set per run (or load from configs below).
+  book_ref: configs/books/v1-book1.tokyo-kyoto-osaka-nara.yml
+  arc_ref: configs/arcs/v1-book1/tokyo.yml
+  chapter_id: DAY_01
+  time_of_day: EVENING
+
+policies:
+  style:
+    style_id: FULL_2D_MAPPA_ADJACENT
+    rendering: HAND_DRAWN
+    shading: FLAT_CEL
+    linework: CLEAN
+    edge_policy: HARD_EDGES
+    global_variance_budget: LOW
+    disallow_style:
+      - PHOTOREALISM
+      - PAINTERLY
+      - COLLAGE
+      - HYBRID
+      - CGI_3D
+    render_guards:
+      style_hard_lock: CRISP_CEL
+      disallow_style:
+        - WATERCOLOR
+        - STORYBOOK
+        - SOFT_BLOOM
+        - HEAVY_TEXTURE
+        - AIRBRUSH_GRADIENTS
+      age_read:
+        match_reference: true
+        no_youthening: true
+
+  environment:
+    interpretation: STYLIZED_NARRATIVE
+    disallow:
+      - EXACT_REPLICA
+      - ANY_LOGOS
+      - ANY_BRAND_MARKS
+      - ANY_RECOGNIZABLE_MASCOTS
+      - ANY_RECOGNIZABLE_CHARACTERS
+      - EXACT_TEXT_COPY
+      - EXACT_SIGN_SHAPES
+      - EXACT_ARCHITECTURE_MATCH
+      - AIRLINE_LIVERIES
+      - TAIL_LOGOS
+      - BRAND_WORDMARKS
+    allow:
+      - ABSTRACTED_FORMS
+      - SIMPLIFIED_SYMBOLS
+      - INTERPRETIVE_COMPOSITION
+      - TYPOGRAPHIC_OVERLAYS
+    replace_with_defaults:
+      - GENERIC_AIRPORT_FORMS
+      - ABSTRACT_MURAL_SHAPES
+      - NONDESCRIPT_SIGNAGE_GLYPHS
+
+  character_lock:
+    disallow:
+      - FACE_SHAPE_CHANGE
+      - ART_STYLE_CHANGE
+      - IDENTITY_DRIFT
+      - AGE_SHIFT
+    allow_variation:
+      - POSE
+      - EXPRESSION
+
+validate_profiles:
+  # 2) Per-book validation profiles (Book 1 vs Cherry Blossom 2027)
+  v1_book1_strict_ip:
+    checks:
+      ip_compliance_forbid:
+        - ANY_LOGOS
+        - ANY_BRAND_MARKS
+        - AIRLINE_LIVERIES
+        - TAIL_LOGOS
+        - BRAND_WORDMARKS
+        - ANY_RECOGNIZABLE_MASCOTS
+        - ANY_RECOGNIZABLE_CHARACTERS
+        - EXACT_SIGN_SHAPES
+        - EXACT_ARCHITECTURE_MATCH
+      character_integrity_forbid:
+        - FACE_SHAPE_CHANGE
+        - IDENTITY_DRIFT
+        - AGE_SHIFT
+      style_integrity_require:
+        - FULL_2D
+        - FLAT_CEL
+        - HARD_EDGES
+      style_integrity_forbid:
+        - PHOTOREALISM
+        - CGI_3D
+        - PAINTERLY
+
+  v2_cherry_blossom_soft_tone:
+    checks:
+      ip_compliance_forbid:
+        - ANY_LOGOS
+        - ANY_BRAND_MARKS
+        - BRAND_WORDMARKS
+        - ANY_RECOGNIZABLE_MASCOTS
+        - ANY_RECOGNIZABLE_CHARACTERS
+      character_integrity_forbid:
+        - FACE_SHAPE_CHANGE
+        - IDENTITY_DRIFT
+        - AGE_SHIFT
+      style_integrity_require:
+        - FULL_2D
+        - FLAT_CEL
+        - HARD_EDGES
+      style_integrity_forbid:
+        - PHOTOREALISM
+        - CGI_3D
+        - PAINTERLY
+    # Cherry blossom book may tolerate slightly more abstract architecture (still not exact replica)
+    relaxations:
+      allow_environment_abstraction_only: true
+
+validate_reuse:
+  # 1) Formalize VALIDATE once and reuse across render steps
+  default_validate_step:
+    type: VALIDATE
+    inherits_policies:
+      - policies.style
+      - policies.environment
+      - policies.character_lock
+
+    # 2) Fail-softly behavior
+    on_fail:
+      mode: SOFT_FAIL_THEN_RETRY        # HARD_FAIL | SOFT_FAIL_THEN_RETRY
+      max_retries: 1
+      retry_strategy:
+        tighten_environment_abstraction:
+          environment:
+            simplification: VERY_HIGH
+            force_replace_with_defaults: true
+            forbid_readable_text: true
+        tighten_text_rules:
+          text:
+            place_name_scope: NARRATION_ONLY
+            forbid_signage_words: true
+        tighten_detail_budget:
+          detail:
+            background_complexity: LOWER
+            preserve_character_detail: true
+
+steps:
+  # ─────────────────────────────────────────────
+  # STEP 1 — Assert Base Style (STATE ONLY)
+  # ─────────────────────────────────────────────
+  - id: STEP_1_ASSERT_STYLE_STATE
+    type: STATE_ONLY
+    command: ASSERT_STYLE_STATE
+    uses_policy: policies.style
+
+  # ─────────────────────────────────────────────
+  # STEP 2 — Create Chapter Start Page (RENDER)
+  # ─────────────────────────────────────────────
+  - id: STEP_2_CREATE_START_PAGE
+    type: RENDER
+    command: CREATE_START_PAGE
+    inherits:
+      - STEP_1_ASSERT_STYLE_STATE
+
+    core:
+      mode: MANGA
+      purpose: CHAPTER_INTRO
+      style_source: CANONICAL
+
+    text:
+      enabled: true
+      authority:
+        content: AUTO_FROM_IMAGE_CONTEXT
+        layout: REFERENCE_EXACT
+        tone: INTRODUCTORY_JOURNEY
+        variance: LOW
+      language:
+        mode: MIXED_EN_JP
+        allow_real_place_names: true
+        place_name_scope: NARRATION_ONLY
+        location_policy: USE_HINT_IF_PROVIDED_ELSE_GENERIC
+      components:
+        jp_banner:
+          placement: VERTICAL_RIGHT_EDGE
+          style:
+            weight: BOLD_KANJI
+            stroke: THICK_BLACK
+            fill: CREAM
+            backing: RED_TEXTURE
+        en_chapter_tag:
+          placement: SMALL_RIBBON_BOTTOM_RIGHT
+          style: BOLD_MANGA_DISPLAY
+        caption_box:
+          placement: ROUGH_PAPER_BOX_BOTTOM_LEFT
+          style: BOLD_MANGA_DISPLAY
+
+    color:
+      mode: FULL_COLOR
+      palette: ANIME_CEL_COLOR
+
+    lighting:
+      profile: WARM_GOLDEN_HOUR
+      rim_light: SOFT_BACKLIGHT
+      color_depth: SLIGHTLY_ENHANCED
+
+    detail:
+      priority_order: [FACE, HAIR, GLASSES, CLOTHING, ENVIRONMENT]
+      hair:
+        detail: HIGH
+        strand_separation: VISIBLE
+        sheen: ANISOTROPIC_GLOSS
+        highlight_style: MANGA_SPECULAR
+      line_density: MEDIUM_HIGH
+      micro_detail: [FABRIC_WRINKLES, HAIR_OVERLAP, GLASS_REFLECTION]
+
+    environment:
+      use: MOOD_ONLY
+      simplification: HIGH
+      replace_with: *ref_replace_with_defaults   # optional if your YAML processor supports anchors; otherwise inline list
+      # If anchors aren’t supported in your tooling, replace with:
+      # replace_with:
+      #   - GENERIC_AIRPORT_FORMS
+      #   - ABSTRACT_MURAL_SHAPES
+      #   - NONDESCRIPT_SIGNAGE_GLYPHS
+
+  # ─────────────────────────────────────────────
+  # STEP 3 — Lock Characters to Start Page (STATE ONLY)
+  # ─────────────────────────────────────────────
+  - id: STEP_3_ASSERT_CHARACTER_LOCK
+    type: STATE_ONLY
+    command: ASSERT_CHARACTER_LOCK
+    inherits:
+      - STEP_1_ASSERT_STYLE_STATE
+      - STEP_2_CREATE_START_PAGE
+    uses_policy: policies.character_lock
+    character_lock:
+      reference: CHAPTER_START_PAGE
+
+  # ─────────────────────────────────────────────
+  # STEP 4 — Assert Environment Rules (STATE ONLY)
+  # ─────────────────────────────────────────────
+  - id: STEP_4_ASSERT_ENVIRONMENT_RULES
+    type: STATE_ONLY
+    command: ASSERT_ENVIRONMENT_RULES
+    inherits:
+      - STEP_1_ASSERT_STYLE_STATE
+    uses_policy: policies.environment
+
+  # ─────────────────────────────────────────────
+  # STEP 5 — Generate Narrative Manga Page (RENDER)
+  # ─────────────────────────────────────────────
+  - id: STEP_5_GENERATE_MANGA_PAGE
+    type: RENDER
+    command: GENERATE_MANGA_PAGE
+    inherits:
+      - STEP_1_ASSERT_STYLE_STATE
+      - STEP_3_ASSERT_CHARACTER_LOCK
+      - STEP_4_ASSERT_ENVIRONMENT_RULES
+
+    page:
+      mode: WEB_COMIC
+      flow: ESTABLISHING_TO_CHARACTER
+
+    behavior:
+      dialogue: AUTO_WHEN_APPROPRIATE
+      character: LOCKED
+      environment: INTERPRETIVE
+      style: LOCKED
+
+    style_guards_from_policy: policies.style.render_guards
+
+  - id: STEP_5A_VALIDATE_MANGA_PAGE
+    uses: validate_reuse.default_validate_step
+    target: STEP_5_GENERATE_MANGA_PAGE
+    profile: v1_book1_strict_ip
+
+  # ─────────────────────────────────────────────
+  # STEP 6 — Generate Manga Filler Page (RENDER)
+  # ─────────────────────────────────────────────
+  - id: STEP_6_GENERATE_FILLER_PAGE
+    type: RENDER
+    command: GENERATE_FILLER_PAGE
+    inherits:
+      - STEP_1_ASSERT_STYLE_STATE
+      - STEP_3_ASSERT_CHARACTER_LOCK
+      - STEP_4_ASSERT_ENVIRONMENT_RULES
+
+    page:
+      focus: ATMOSPHERE_OR_TRANSITION
+
+    behavior:
+      dialogue: OPTIONAL
+      character: LOCKED
+      environment: INTERPRETIVE
+      style: LOCKED
+
+    style_guards_from_policy: policies.style.render_guards
+
+  - id: STEP_6A_VALIDATE_FILLER_PAGE
+    uses: validate_reuse.default_validate_step
+    target: STEP_6_GENERATE_FILLER_PAGE
+    profile: v1_book1_strict_ip
+
+  # ─────────────────────────────────────────────
+  # STEP 7 — Create Chapter End Page (RENDER)
+  # ─────────────────────────────────────────────
+  - id: STEP_7_CREATE_END_PAGE
+    type: RENDER
+    command: CREATE_END_PAGE
+    inherits:
+      - STEP_1_ASSERT_STYLE_STATE
+      - STEP_3_ASSERT_CHARACTER_LOCK
+      - STEP_4_ASSERT_ENVIRONMENT_RULES
+
+    end_page:
+      mode: CLIFFHANGER_OR_CLOSURE
+
+    behavior:
+      character: LOCKED
+      environment: INTERPRETIVE
+      style: LOCKED
+
+    style_guards_from_policy: policies.style.render_guards
+
+  - id: STEP_7A_VALIDATE_END_PAGE
+    uses: validate_reuse.default_validate_step
+    target: STEP_7_CREATE_END_PAGE
+    profile: v1_book1_strict_ip

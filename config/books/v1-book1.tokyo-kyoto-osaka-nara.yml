@@ -1,0 +1,13 @@
+book:
+  id: v1-book1
+  title: Japan Trip — Book 1
+  year: 2025
+  default_validate_profile: v1_book1_strict_ip
+  memory:
+    style_memory: PERSISTENT_PER_BOOK
+    character_memory: PERSISTENT_PER_BOOK
+  arcs:
+    - tokyo
+    - kyoto
+    - osaka
+    - nara

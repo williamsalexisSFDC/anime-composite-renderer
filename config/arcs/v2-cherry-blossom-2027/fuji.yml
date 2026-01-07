@@ -1,0 +1,10 @@
+arc:
+  id: fuji
+  visual_profile: NATURAL_MONUMENTAL
+  palette_bias: CLEAR_SKY + SOFT_PASTELS
+  lighting_temperature: CRISP_DAYLIGHT
+  background_complexity: MEDIUM
+  environment_replace_with:
+    - GENERIC_MOUNTAIN_SILHOUETTES
+    - ABSTRACT_TRAIL_FORMS
+    - NONDESCRIPT_SIGNAGE_GLYPHS

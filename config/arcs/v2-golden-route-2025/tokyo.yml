@@ -1,0 +1,11 @@
+arc:
+  id: tokyo
+  visual_profile: URBAN_NEON
+  palette_bias: COOL_NEON_ACCENTS
+  lighting_temperature: COOL_TO_NEUTRAL
+  background_complexity: HIGH
+  environment_replace_with:
+    - GENERIC_TRAIN_FORMS
+    - GENERIC_CITY_SIGNS_GLYPHS
+    - ABSTRACT_NEON_SHAPES
+  environment_avoid:

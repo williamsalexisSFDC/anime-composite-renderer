@@ -1,0 +1,104 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "anime-composite-workflow.schema.json",
+  "title": "Anime Composite Full 2D Locked Workflow",
+  "type": "object",
+  "required": ["workflow", "policies", "steps"],
+  "properties": {
+    "workflow": {
+      "type": "object",
+      "required": ["name", "version"],
+      "properties": {
+        "name": { "type": "string" },
+        "version": { "type": ["number", "string"] }
+      },
+      "additionalProperties": true
+    },
+    "context": {
+      "type": "object",
+      "properties": {
+        "book_ref": { "type": "string" },
+        "arc_ref": { "type": "string" },
+        "chapter_id": { "type": "string" },
+        "time_of_day": { "type": "string" }
+      },
+      "additionalProperties": true
+    },
+    "policies": {
+      "type": "object",
+      "required": ["style", "environment", "character_lock"],
+      "properties": {
+        "style": {
+          "type": "object",
+          "required": ["style_id", "rendering", "shading", "linework", "edge_policy", "global_variance_budget"],
+          "properties": {
+            "style_id": { "type": "string" },
+            "rendering": { "type": "string", "enum": ["HAND_DRAWN"] },
+            "shading": { "type": "string", "enum": ["FLAT_CEL"] },
+            "linework": { "type": "string", "enum": ["CLEAN"] },
+            "edge_policy": { "type": "string", "enum": ["HARD_EDGES"] },
+            "global_variance_budget": { "type": "string", "enum": ["LOW", "MEDIUM", "HIGH"] },
+            "disallow_style": { "type": "array", "items": { "type": "string" } },
+            "render_guards": { "type": "object" }
+          },
+          "additionalProperties": true
+        },
+        "environment": {
+          "type": "object",
+          "required": ["interpretation", "disallow", "allow"],
+          "properties": {
+            "interpretation": { "type": "string" },
+            "disallow": { "type": "array", "items": { "type": "string" } },
+            "allow": { "type": "array", "items": { "type": "string" } },
+            "replace_with_defaults": { "type": "array", "items": { "type": "string" } }
+          },
+          "additionalProperties": true
+        },
+        "character_lock": {
+          "type": "object",
+          "required": ["disallow", "allow_variation"],
+          "properties": {
+            "disallow": { "type": "array", "items": { "type": "string" } },
+            "allow_variation": { "type": "array", "items": { "type": "string" } }
+          },
+          "additionalProperties": true
+        }
+      },
+      "additionalProperties": true
+    },
+    "validate_profiles": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "required": ["checks"],
+        "properties": {
+          "checks": { "type": "object" },
+          "relaxations": { "type": "object" }
+        },
+        "additionalProperties": true
+      }
+    },
+    "validate_reuse": {
+      "type": "object",
+      "additionalProperties": { "type": "object" }
+    },
+    "steps": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id"],
+        "properties": {
+          "id": { "type": "string" },
+          "type": { "type": "string", "enum": ["STATE_ONLY", "RENDER", "VALIDATE"] },
+          "command": { "type": "string" },
+          "uses": { "type": "string" },
+          "target": { "type": "string" },
+          "profile": { "type": "string" },
+          "inherits": { "type": "array", "items": { "type": "string" } }
+        },
+        "additionalProperties": true
+      }
+    }
+  },
+  "additionalProperties": true
+}
