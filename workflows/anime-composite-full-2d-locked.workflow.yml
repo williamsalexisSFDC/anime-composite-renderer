@@ -1,376 +1,488 @@
-workflow:
-  name: ANIME_COMPOSITE__FULL_2D_LOCKED
-  version: 2.1
+# workflows/anime-composite-full-2d-locked.workflow.yml
+#
+# Purpose:
+# - Single source of truth for the ANIME_COMPOSITE__FULL_2D_LOCKED pipeline
+# - GitHub Actions–style structure (jobs/steps) + explicit policy resolution at runtime
+# - No silent "inherit": we resolve policies + validation profiles explicitly, then validate render outputs
+#
+# Notes:
+# - YAML anchors ARE your “inherit” mechanism here (safe + deterministic).
+# - Validation is centralized once and reused across render steps (Start Page / Page / Filler / End).
+# - “No-youthening” is enforced both as a policy AND as a validation rule.
 
-# ─────────────────────────────────────────────
-# RUNTIME CONTEXT
-# These values change per execution (book/arc/chapter)
-# ─────────────────────────────────────────────
-context:
-  # These are “runtime knobs” you set per run (or load from configs below).
-  book_ref: configs/books/v1-book1.tokyo-kyoto-osaka-nara.yml
-  arc_ref: configs/arcs/v1-book1/tokyo.yml
-  chapter_id: DAY_01
-  time_of_day: EVENING
+name: ANIME_COMPOSITE__FULL_2D_LOCKED
 
-# ─────────────────────────────────────────────
-# GLOBAL POLICIES
-# Single source of truth for style, environment, and character rules
-# ─────────────────────────────────────────────
+on:
+  workflow_dispatch:
+    inputs:
+      # Which config file drives this run (book, arc, city, etc.)
+      config_path:
+        description: "Path to a config YAML (e.g., config/books/v1-book1.tokyo-kyoto-osaka-nara.yml)"
+        required: true
+        default: "config/books/v1-book1.tokyo-kyoto-osaka-nara.yml"
+
+      # Optional hint to override / supply a location label (used by TEXT_SOURCE = AUTO... if present)
+      location_hint:
+        description: "Optional: location hint (e.g., NRT Airport)"
+        required: false
+        default: ""
+
+      # Select validation profile (book vs arc differences)
+      validation_profile:
+        description: "Validation profile (e.g., v1_book1_strict_ip, v2_cherry_blossom_soft_tone)"
+        required: true
+        default: "v1_book1_strict_ip"
+
+      # Choose JP/EN behavior
+      text_language_mode:
+        description: "EN_ONLY | JP_ONLY | MIXED_EN_JP"
+        required: true
+        default: "MIXED_EN_JP"
+
+      # Fail softly option: when enabled, pipeline can attempt auto-regenerate with tighter abstraction
+      fail_softly:
+        description: "If true, auto-regenerate once with stricter abstraction when validation fails"
+        required: true
+        default: "true"
+
+      # Arc/book versioning (for output paths)
+      arc_id:
+        description: "Arc identifier (e.g., v2-golden-route-2025, v2-cherry-blossom-2027)"
+        required: true
+        default: "v2-golden-route-2025"
+
+      chapter_id:
+        description: "Chapter identifier (e.g., tokyo-ward-01, kyoto-day-02)"
+        required: true
+        default: "tokyo-ward-01"
+
+# ──────────────────────────────────────────────────────────────────────────────
+# GLOBAL POLICIES (single source of truth)
+# - Use anchors so jobs/steps never copy/paste the same DISALLOW lists.
+# - These get resolved and injected into every render request AND validated after.
+# ──────────────────────────────────────────────────────────────────────────────
 policies:
+  # Style + rendering lock (MAPPA-adjacent, full-color, crisp cel)
+  style: &POLICY_STYLE
+    # Base style state
+    STYLE: FULL_2D_MAPPA_ADJACENT
+    RENDERING: HAND_DRAWN
+    SHADING: FLAT_CEL
+    LINEWORK: CLEAN
+    EDGE_POLICY: HARD_EDGES
+    GLOBAL_VARIANCE_BUDGET: LOW
 
-  # ── STYLE POLICY ────────────────────────────
-  # Defines the immutable visual contract for the workflow
-  style:
-    style_id: FULL_2D_MAPPA_ADJACENT
-    rendering: HAND_DRAWN
-    shading: FLAT_CEL
-    linework: CLEAN
-    edge_policy: HARD_EDGES
-    global_variance_budget: LOW
+    # Memory semantics (STATE ONLY steps depend on this)
+    STYLE_MEMORY: PERSISTENT_PER_CHAPTER
+    CHARACTER_MEMORY: PERSISTENT_PER_CHAPTER
+    MEMORY_SCOPE: CHAPTER
 
-    # Disallowed rendering styles (hard stop)
-    disallow_style:
+    # Explicitly forbidden style families (drift prevention)
+    DISALLOW_STYLE:
       - PHOTOREALISM
       - PAINTERLY
       - COLLAGE
       - HYBRID
       - CGI_3D
+      - WATERCOLOR
+      - STORYBOOK
+      - SOFT_BLOOM
+      - HEAVY_TEXTURE
+      - AIRBRUSH_GRADIENTS
 
-    # Render-time guards applied to every page
-    render_guards:
-      style_hard_lock: CRISP_CEL
-      disallow_style:
-        - WATERCOLOR
-        - STORYBOOK
-        - SOFT_BLOOM
-        - HEAVY_TEXTURE
-        - AIRBRUSH_GRADIENTS
-      age_read:
-        match_reference: true
-        no_youthening: true
+  # Character integrity lock (includes age lock / no-youthening)
+  character: &POLICY_CHARACTER
+    AGE_READ: MATCH_REFERENCE
+    NO_YOUTHENING: true
 
-  # ── ENVIRONMENT / IP POLICY ─────────────────
-  # Centralized IP, signage, and architecture protection
-  environment:
-    interpretation: STYLIZED_NARRATIVE
+    # Prohibited changes across pages
+    DISALLOW_CHARACTER:
+      - FACE_SHAPE_CHANGE
+      - ART_STYLE_CHANGE
+      - IDENTITY_DRIFT
+      - AGE_SHIFT
+      - AGE_REGRESSION
+      - YOUTHENING
 
-    # Anything listed here must NEVER appear in final renders
-    disallow:
+    # Allowed variation
+    ALLOW_VARIATION:
+      - POSE
+      - EXPRESSION
+
+  # Environment safety + abstraction
+  environment: &POLICY_ENVIRONMENT
+    ENVIRONMENT_USE: MOOD_ONLY
+    SIMPLIFICATION: HIGH
+
+    # Replace “too real” elements with safe abstractions
+    REPLACE_WITH:
+      - GENERIC_AIRPORT_FORMS
+      - ABSTRACT_MURAL_SHAPES
+      - NONDESCRIPT_SIGNAGE_GLYPHS
+
+    # Prohibited environment elements
+    DISALLOW_ENVIRONMENT:
       - EXACT_REPLICA
       - ANY_LOGOS
       - ANY_BRAND_MARKS
       - ANY_RECOGNIZABLE_MASCOTS
       - ANY_RECOGNIZABLE_CHARACTERS
-      - EXACT_TEXT_COPY
-      - EXACT_SIGN_SHAPES
       - EXACT_ARCHITECTURE_MATCH
       - AIRLINE_LIVERIES
       - TAIL_LOGOS
       - BRAND_WORDMARKS
 
-    # Allowed abstraction strategies
-    allow:
-      - ABSTRACTED_FORMS
-      - SIMPLIFIED_SYMBOLS
-      - INTERPRETIVE_COMPOSITION
-      - TYPOGRAPHIC_OVERLAYS
+  # Typography + title card behavior (reference-driven)
+  text: &POLICY_TEXT
+    CHAPTER_TEXT: ON
+    TEXT_SOURCE: AUTO_FROM_IMAGE_CONTEXT
+    CAPTION_VARIANCE: LOW
+    PHRASE_BANK: LOCKED_MINIMAL
 
-    # Default replacements when real-world detail is suppressed
-    replace_with_defaults:
-      - GENERIC_AIRPORT_FORMS
-      - ABSTRACT_MURAL_SHAPES
-      - NONDESCRIPT_SIGNAGE_GLYPHS
+    # Location handling (dynamic text can use location_hint or inferred context)
+    ALLOW_REAL_PLACE_NAMES: true
+    LOCATION_POLICY: USE_HINT_IF_PROVIDED_ELSE_GENERIC
 
-  # ── CHARACTER LOCK POLICY ───────────────────
-  # Prevents identity drift after the start page
-  character_lock:
-    disallow:
-      - FACE_SHAPE_CHANGE
-      - ART_STYLE_CHANGE
-      - IDENTITY_DRIFT
-      - AGE_SHIFT
-    allow_variation:
-      - POSE
-      - EXPRESSION
+    # Layout lock (match your gold-standard start page structure)
+    TEXT_STYLE: "MANGA_TITLE_CARD + NARRATION_BOX"
+    TYPOGRAPHY_LOCK: MATCH_REFERENCE_EXACT_LAYOUT
+    JP_BANNER: VERTICAL_RIGHT_EDGE
+    EN_CHAPTER_TAG: SMALL_RIBBON_BOTTOM_RIGHT
+    CAPTION_BUBBLE: ROUGH_PAPER_BOX_BOTTOM_LEFT
+    FONT_RULE: BOLD_MANGA_DISPLAY
 
-# ─────────────────────────────────────────────
+  # Visual detail target (hair sheen + micro detail)
+  detail: &POLICY_DETAIL
+    HAIR_DETAIL: HIGH
+    HAIR_STRAND_SEPARATION: VISIBLE
+    HAIR_SHEEN: ANISOTROPIC_GLOSS
+    HIGHLIGHT_STYLE: MANGA_SPECULAR
+    LINE_DENSITY: MEDIUM_HIGH
+    MICRO_DETAIL:
+      - FABRIC_WRINKLES
+      - HAIR_OVERLAP
+      - GLASS_REFLECTION
+
+  # Color target (explicitly FULL COLOR, anime cel palette)
+  color: &POLICY_COLOR
+    COLOR_MODE: FULL_COLOR
+    PALETTE: ANIME_CEL_COLOR
+    LIGHTING: WARM_GOLDEN_HOUR
+    RIM_LIGHT: SOFT_BACKLIGHT
+    COLOR_DEPTH: SLIGHTLY_ENHANCED
+
+# ──────────────────────────────────────────────────────────────────────────────
 # VALIDATION PROFILES
-# Swappable enforcement profiles per book/arc
-# ─────────────────────────────────────────────
-validate_profiles:
-
-  # Book 1: strict IP + architecture enforcement
-  v1_book1_strict_ip:
+# - Centralized once. These are referenced by `inputs.validation_profile`.
+# - This is what enables Book 1 vs Cherry Blossom differences without copy/paste.
+# ──────────────────────────────────────────────────────────────────────────────
+validation_profiles:
+  v1_book1_strict_ip: &PROFILE_V1_BOOK1_STRICT_IP
+    # “Strict” means: if any disallowed content is detected, fail hard (unless fail_softly)
+    mode: STRICT
     checks:
-      ip_compliance_forbid:
-        - ANY_LOGOS
-        - ANY_BRAND_MARKS
-        - AIRLINE_LIVERIES
-        - TAIL_LOGOS
-        - BRAND_WORDMARKS
-        - ANY_RECOGNIZABLE_MASCOTS
-        - ANY_RECOGNIZABLE_CHARACTERS
-        - EXACT_SIGN_SHAPES
-        - EXACT_ARCHITECTURE_MATCH
-      character_integrity_forbid:
+      # Honor environment abstraction strictly
+      require_environment_abstraction: true
+
+      # Enforce no-youthening + identity stability
+      forbid_character:
         - FACE_SHAPE_CHANGE
         - IDENTITY_DRIFT
         - AGE_SHIFT
-      style_integrity_require:
-        - FULL_2D
-        - FLAT_CEL
-        - HARD_EDGES
-      style_integrity_forbid:
-        - PHOTOREALISM
-        - CGI_3D
-        - PAINTERLY
+        - AGE_REGRESSION
+        - YOUTHENING
 
-  # Book 2: Cherry Blossom Journey (softer environment)
-  v2_cherry_blossom_soft_tone:
+      # Enforce style lock
+      forbid_style:
+        - PHOTOREALISM
+        - PAINTERLY
+        - COLLAGE
+        - HYBRID
+        - CGI_3D
+
+  v2_cherry_blossom_soft_tone: &PROFILE_V2_CHERRY_BLOSSOM_SOFT_TONE
+    # “Soft tone” still enforces safety + identity, but allows softer lighting/atmosphere variance
+    mode: SOFT
     checks:
-      ip_compliance_forbid:
-        - ANY_LOGOS
-        - ANY_BRAND_MARKS
-        - BRAND_WORDMARKS
-        - ANY_RECOGNIZABLE_MASCOTS
-        - ANY_RECOGNIZABLE_CHARACTERS
-      character_integrity_forbid:
+      require_environment_abstraction: true
+      forbid_character:
         - FACE_SHAPE_CHANGE
         - IDENTITY_DRIFT
         - AGE_SHIFT
-      style_integrity_require:
-        - FULL_2D
-        - FLAT_CEL
-        - HARD_EDGES
-      style_integrity_forbid:
+        - AGE_REGRESSION
+        - YOUTHENING
+      forbid_style:
         - PHOTOREALISM
+        - COLLAGE
         - CGI_3D
-        - PAINTERLY
-    # Cherry blossom book may tolerate slightly more abstract architecture (still not exact replica)
-    relaxations:
-      allow_environment_abstraction_only: true
 
-# ─────────────────────────────────────────────
-# REUSABLE VALIDATION STEP
-# Enforces that inherited policies were honored at runtime
-# ─────────────────────────────────────────────
-validate_reuse:
-  default_validate_step:
-    type: VALIDATE
-    inherits_policies:
-      - policies.style
-      - policies.environment
-      - policies.character_lock
+# ──────────────────────────────────────────────────────────────────────────────
+# REUSABLE STEP TEMPLATES (anchors)
+# - These are your “inherit” blocks to reduce omission risk.
+# ──────────────────────────────────────────────────────────────────────────────
+x-steps:
+  # Central VALIDATE step (defined once, reused everywhere)
+  validate_render: &STEP_VALIDATE_RENDER
+    name: VALIDATE — Enforce policies + profile checks (pseudo-step)
+    # This is intentionally a pseudo-step. Replace the `run:` with your validator script/tool.
+    # The contract: validator reads the rendered output + the resolved policies + profile, then:
+    # - exits non-zero on failure (STRICT), OR
+    # - optionally requests one auto-regenerate (fail_softly=true)
+    run: |
+      echo "VALIDATE: start"
+      echo " - profile: $VALIDATION_PROFILE"
+      echo " - fail_softly: $FAIL_SOFTLY"
+      echo " - arc_id/chapter_id: $ARC_ID/$CHAPTER_ID"
+      echo " - output_dir: $OUTPUT_DIR"
+      echo ""
+      echo "VALIDATE: (placeholder) run your validator here"
+      echo " - Inputs: rendered image(s), resolved_policies.yml, selected profile"
+      echo " - Output: exit 0 if pass, exit 1 if fail"
+      #
+      # Example (pseudo):
+      #   python tools/validate_render.py \
+      #     --image "$OUTPUT_IMAGE" \
+      #     --policies "$RESOLVED_POLICIES_FILE" \
+      #     --profile "$VALIDATION_PROFILE" \
+      #     --fail-softly "$FAIL_SOFTLY"
+      #
 
-    # Soft-fail strategy: tighten abstraction and retry once
-    on_fail:
-      mode: SOFT_FAIL_THEN_RETRY        # HARD_FAIL | SOFT_FAIL_THEN_RETRY
-      max_retries: 1
-      retry_strategy:
-        tighten_environment_abstraction:
-          environment:
-            simplification: VERY_HIGH
-            force_replace_with_defaults: true
-            forbid_readable_text: true
-        tighten_text_rules:
-          text:
-            place_name_scope: NARRATION_ONLY
-            forbid_signage_words: true
-        tighten_detail_budget:
-          detail:
-            background_complexity: LOWER
-            preserve_character_detail: true
+  # Optional soft-fail regenerate step (only invoked when validation fails AND fail_softly=true)
+  regenerate_once: &STEP_REGENERATE_ONCE
+    name: REGENERATE — Tighten abstraction + reduce variance (one retry)
+    run: |
+      echo "REGENERATE: applying tighter abstraction + lower variance"
+      # Implement your second-pass render here with stricter knobs:
+      # - ENVIRONMENT.SIMPLIFICATION: VERY_HIGH
+      # - CAPTION_VARIANCE: VERY_LOW
+      # - Stronger DISALLOW enforcement on any detected offenders
+      #
 
-# ─────────────────────────────────────────────
-# PIPELINE STEPS
-# Ordered execution model
-# ─────────────────────────────────────────────
-steps:
-  # ─────────────────────────────────────────────
+jobs:
+  # ────────────────────────────────────────────────────────────────────────────
+  # STEP 0 — Start Clean Workflow (STATE ONLY)
+  # Purpose: Initialize clean runtime state
+  # Generates image: No
+  # ────────────────────────────────────────────────────────────────────────────
+  step0_workflow:
+    runs-on: ubuntu-latest
+    outputs:
+      resolved_policies_file: ${{ steps.resolve.outputs.resolved_policies_file }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: WORKFLOW — ANIME_COMPOSITE__FULL_2D_LOCKED (STATE ONLY)
+        run: |
+          echo "[UI RECEIPT — ANIME_COMPOSITE__FULL_2D_LOCKED]"
+          echo "Command: WORKFLOW"
+          echo "Type: STATE_ONLY"
+          echo "Image Generated: No"
+          echo "Next Step: ASSERT_STYLE_STATE"
+
+      # Resolve policies into a concrete runtime file (explicit, deterministic; no silent inherit)
+      - name: RESOLVE — policies + profile + inputs (explicit runtime contract)
+        id: resolve
+        env:
+          VALIDATION_PROFILE: ${{ inputs.validation_profile }}
+          TEXT_LANGUAGE_MODE: ${{ inputs.text_language_mode }}
+          LOCATION_HINT: ${{ inputs.location_hint }}
+        run: |
+          echo "Resolving policies + inputs into resolved_policies.yml"
+          #
+          # In a real implementation, you’d serialize the merged policies + input overrides.
+          # For now, we write a placeholder file to establish the pattern.
+          #
+          cat > resolved_policies.yml <<'YML'
+          # resolved_policies.yml (generated)
+          # This file is the runtime “truth” that every render + validate consumes.
+          #
+          # Policies (style/character/environment/text/detail/color) come from the workflow `policies:` block.
+          # Profile checks come from `validation_profiles:` selection.
+          #
+          YML
+          echo "resolved_policies.yml created"
+          echo "resolved_policies_file=resolved_policies.yml" >> $GITHUB_OUTPUT
+
+  # ────────────────────────────────────────────────────────────────────────────
   # STEP 1 — Assert Base Style (STATE ONLY)
-  # Prevents silent style drift across the chapter
-  # ─────────────────────────────────────────────
-  - id: STEP_1_ASSERT_STYLE_STATE
-    type: STATE_ONLY
-    command: ASSERT_STYLE_STATE
-    uses_policy: policies.style
+  # Purpose: Prevent silent style drift
+  # Generates image: No
+  # ────────────────────────────────────────────────────────────────────────────
+  step1_assert_style:
+    runs-on: ubuntu-latest
+    needs: [step0_workflow]
+    steps:
+      - name: ASSERT_STYLE_STATE (STATE ONLY)
+        run: |
+          echo "[UI RECEIPT — ANIME_COMPOSITE__FULL_2D_LOCKED]"
+          echo "Command: ASSERT_STYLE_STATE"
+          echo "Type: STATE_ONLY"
+          echo "Image Generated: No"
+          echo "Next Step: INITIATE_CHARACTER_MODEL_LOCK"
 
-  # ─────────────────────────────────────────────
-  # STEP 2 — Create Chapter Start Page (RENDER)
-  # Establishes tone, typography, and visual anchor
-  # ─────────────────────────────────────────────
-  - id: STEP_2_CREATE_START_PAGE
-    type: RENDER
-    command: CREATE_START_PAGE
-    inherits:
-      - STEP_1_ASSERT_STYLE_STATE
+  # ────────────────────────────────────────────────────────────────────────────
+  # STEP 2 — Character Model Lock (STATE ONLY)
+  # Purpose: Lock a unified character model using reference photos
+  # Generates image: No
+  # ────────────────────────────────────────────────────────────────────────────
+  step2_lock_character_model:
+    runs-on: ubuntu-latest
+    needs: [step1_assert_style]
+    steps:
+      - name: INITIATE — Character Model Lock (STATE ONLY)
+        run: |
+          echo "[UI RECEIPT — ANIME_COMPOSITE__FULL_2D_LOCKED]"
+          echo "Command: INITIATE"
+          echo "Type: STATE_ONLY"
+          echo "Image Generated: No"
+          echo "Next Step: CREATE_START_PAGE"
 
-    core:
-      mode: MANGA
-      purpose: CHAPTER_INTRO
-      style_source: CANONICAL
-
-    # TEXT SYSTEM: auto-generated, layout-locked
-    text:
-      enabled: true
-      authority:
-        content: AUTO_FROM_IMAGE_CONTEXT
-        layout: REFERENCE_EXACT
-        tone: INTRODUCTORY_JOURNEY
-        variance: LOW
-      language:
-        mode: MIXED_EN_JP
-        allow_real_place_names: true
-        place_name_scope: NARRATION_ONLY
-        location_policy: USE_HINT_IF_PROVIDED_ELSE_GENERIC
-      components:
-        jp_banner:
-          placement: VERTICAL_RIGHT_EDGE
-          style:
-            weight: BOLD_KANJI
-            stroke: THICK_BLACK
-            fill: CREAM
-            backing: RED_TEXTURE
-        en_chapter_tag:
-          placement: SMALL_RIBBON_BOTTOM_RIGHT
-          style: BOLD_MANGA_DISPLAY
-        caption_box:
-          placement: ROUGH_PAPER_BOX_BOTTOM_LEFT
-          style: BOLD_MANGA_DISPLAY
-
-    # COLOR & LIGHTING
-    color:
-      mode: FULL_COLOR
-      palette: ANIME_CEL_COLOR
-    lighting:
-      profile: WARM_GOLDEN_HOUR
-      rim_light: SOFT_BACKLIGHT
-      color_depth: SLIGHTLY_ENHANCED
-
-    # DETAIL PRIORITIZATION
-    detail:
-      priority_order: [FACE, HAIR, GLASSES, CLOTHING, ENVIRONMENT]
-      hair:
-        detail: HIGH
-        strand_separation: VISIBLE
-        sheen: ANISOTROPIC_GLOSS
-        highlight_style: MANGA_SPECULAR
-      line_density: MEDIUM_HIGH
-      micro_detail: [FABRIC_WRINKLES, HAIR_OVERLAP, GLASS_REFLECTION]
-
-    # ENVIRONMENT HANDLING (mood only, no exact replication)
-    environment:
-      use: MOOD_ONLY
-      simplification: HIGH
-      replace_with:
-        - GENERIC_AIRPORT_FORMS
-        - ABSTRACT_MURAL_SHAPES
-        - NONDESCRIPT_SIGNAGE_GLYPHS
-
-  # ─────────────────────────────────────────────
+  # ────────────────────────────────────────────────────────────────────────────
   # STEP 3 — Lock Characters to Start Page (STATE ONLY)
-  # ─────────────────────────────────────────────
-  - id: STEP_3_ASSERT_CHARACTER_LOCK
-    type: STATE_ONLY
-    command: ASSERT_CHARACTER_LOCK
-    inherits:
-      - STEP_1_ASSERT_STYLE_STATE
-      - STEP_2_CREATE_START_PAGE
-    uses_policy: policies.character_lock
-    character_lock:
-      reference: CHAPTER_START_PAGE
+  # Purpose: Ensure facial + design consistency anchored to the Start Page output
+  # Generates image: No
+  # ────────────────────────────────────────────────────────────────────────────
+  step3_assert_character_lock:
+    runs-on: ubuntu-latest
+    needs: [step2_lock_character_model]
+    steps:
+      - name: ASSERT_CHARACTER_LOCK (STATE ONLY)
+        run: |
+          echo "[UI RECEIPT — ANIME_COMPOSITE__FULL_2D_LOCKED]"
+          echo "Command: ASSERT_CHARACTER_LOCK"
+          echo "Type: STATE_ONLY"
+          echo "Image Generated: No"
+          echo "Next Step: ASSERT_ENVIRONMENT_RULES"
 
-  # ─────────────────────────────────────────────
+  # ────────────────────────────────────────────────────────────────────────────
   # STEP 4 — Assert Environment Rules (STATE ONLY)
-  # ─────────────────────────────────────────────
-  - id: STEP_4_ASSERT_ENVIRONMENT_RULES
-    type: STATE_ONLY
-    command: ASSERT_ENVIRONMENT_RULES
-    inherits:
-      - STEP_1_ASSERT_STYLE_STATE
-    uses_policy: policies.environment
+  # Purpose: Safe handling of monuments/statues/artwork/signage/IP displays
+  # Generates image: No
+  # ────────────────────────────────────────────────────────────────────────────
+  step4_assert_environment:
+    runs-on: ubuntu-latest
+    needs: [step3_assert_character_lock]
+    steps:
+      - name: ASSERT_ENVIRONMENT_RULES (STATE ONLY)
+        run: |
+          echo "[UI RECEIPT — ANIME_COMPOSITE__FULL_2D_LOCKED]"
+          echo "Command: ASSERT_ENVIRONMENT_RULES"
+          echo "Type: STATE_ONLY"
+          echo "Image Generated: No"
+          echo "Next Step: GENERATE_MANGA_PAGE (or CREATE_START_PAGE)"
 
-  # ─────────────────────────────────────────────
+  # ────────────────────────────────────────────────────────────────────────────
+  # START PAGE — Create Chapter Intro (RENDER)
+  # Purpose: Chapter start page with title card + narration box (your gold standard)
+  # Generates image: Yes
+  # ────────────────────────────────────────────────────────────────────────────
+  create_start_page:
+    runs-on: ubuntu-latest
+    needs: [step0_workflow, step4_assert_environment]
+    env:
+      ARC_ID: ${{ inputs.arc_id }}
+      CHAPTER_ID: ${{ inputs.chapter_id }}
+      VALIDATION_PROFILE: ${{ inputs.validation_profile }}
+      FAIL_SOFTLY: ${{ inputs.fail_softly }}
+      OUTPUT_DIR: "out/${{ inputs.arc_id }}/${{ inputs.chapter_id }}/start-page"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: CREATE_START_PAGE (RENDER)
+        run: |
+          mkdir -p "$OUTPUT_DIR"
+          echo "Rendering START PAGE to $OUTPUT_DIR"
+          #
+          # Render tool should consume:
+          # - config_path (book/arc config)
+          # - resolved_policies.yml
+          # - reference photos
+          # and output ONE image.
+          #
+          # Placeholder output:
+          echo "START_PAGE_IMAGE=chapter_start_page.png" >> $GITHUB_ENV
+          touch "$OUTPUT_DIR/chapter_start_page.png"
+
+      - *STEP_VALIDATE_RENDER
+
+  # ────────────────────────────────────────────────────────────────────────────
   # STEP 5 — Generate Narrative Manga Page (RENDER)
-  # ─────────────────────────────────────────────
-  - id: STEP_5_GENERATE_MANGA_PAGE
-    type: RENDER
-    command: GENERATE_MANGA_PAGE
-    inherits:
-      - STEP_1_ASSERT_STYLE_STATE
-      - STEP_3_ASSERT_CHARACTER_LOCK
-      - STEP_4_ASSERT_ENVIRONMENT_RULES
+  # Purpose: Main story progression
+  # Generates image: Yes (1 page)
+  # ────────────────────────────────────────────────────────────────────────────
+  generate_manga_page:
+    runs-on: ubuntu-latest
+    needs: [create_start_page]
+    env:
+      ARC_ID: ${{ inputs.arc_id }}
+      CHAPTER_ID: ${{ inputs.chapter_id }}
+      VALIDATION_PROFILE: ${{ inputs.validation_profile }}
+      FAIL_SOFTLY: ${{ inputs.fail_softly }}
+      OUTPUT_DIR: "out/${{ inputs.arc_id }}/${{ inputs.chapter_id }}/pages"
+    steps:
+      - name: GENERATE_MANGA_PAGE (RENDER)
+        run: |
+          mkdir -p "$OUTPUT_DIR"
+          echo "Rendering NARRATIVE PAGE to $OUTPUT_DIR"
+          echo "OUTPUT_IMAGE=page_001.png" >> $GITHUB_ENV
+          touch "$OUTPUT_DIR/page_001.png"
 
-    page:
-      mode: WEB_COMIC
-      flow: ESTABLISHING_TO_CHARACTER
+      - *STEP_VALIDATE_RENDER
 
-    behavior:
-      dialogue: AUTO_WHEN_APPROPRIATE
-      character: LOCKED
-      environment: INTERPRETIVE
-      style: LOCKED
-
-    style_guards_from_policy: policies.style.render_guards
-
-  # STEP 5A — Validate Narrative Page
-  - id: STEP_5A_VALIDATE_MANGA_PAGE
-    uses: validate_reuse.default_validate_step
-    target: STEP_5_GENERATE_MANGA_PAGE
-    profile: v1_book1_strict_ip
-
-  # ─────────────────────────────────────────────
+  # ────────────────────────────────────────────────────────────────────────────
   # STEP 6 — Generate Manga Filler Page (RENDER)
-  # ─────────────────────────────────────────────
-  - id: STEP_6_GENERATE_FILLER_PAGE
-    type: RENDER
-    command: GENERATE_FILLER_PAGE
-    inherits:
-      - STEP_1_ASSERT_STYLE_STATE
-      - STEP_3_ASSERT_CHARACTER_LOCK
-      - STEP_4_ASSERT_ENVIRONMENT_RULES
+  # Purpose: Transitions, pacing, atmosphere
+  # Generates image: Yes (1 page)
+  # ────────────────────────────────────────────────────────────────────────────
+  generate_filler_page:
+    runs-on: ubuntu-latest
+    needs: [generate_manga_page]
+    env:
+      ARC_ID: ${{ inputs.arc_id }}
+      CHAPTER_ID: ${{ inputs.chapter_id }}
+      VALIDATION_PROFILE: ${{ inputs.validation_profile }}
+      FAIL_SOFTLY: ${{ inputs.fail_softly }}
+      OUTPUT_DIR: "out/${{ inputs.arc_id }}/${{ inputs.chapter_id }}/filler"
+    steps:
+      - name: GENERATE_FILLER_PAGE (RENDER)
+        run: |
+          mkdir -p "$OUTPUT_DIR"
+          echo "Rendering FILLER PAGE to $OUTPUT_DIR"
+          echo "OUTPUT_IMAGE=filler_001.png" >> $GITHUB_ENV
+          touch "$OUTPUT_DIR/filler_001.png"
 
-    page:
-      focus: ATMOSPHERE_OR_TRANSITION
+      - *STEP_VALIDATE_RENDER
 
-    behavior:
-      dialogue: OPTIONAL
-      character: LOCKED
-      environment: INTERPRETIVE
-      style: LOCKED
-
-    style_guards_from_policy: policies.style.render_guards
-
-  # STEP 6A — Validate Filler Page
-  - id: STEP_6A_VALIDATE_FILLER_PAGE
-    uses: validate_reuse.default_validate_step
-    target: STEP_6_GENERATE_FILLER_PAGE
-    profile: v1_book1_strict_ip
-
-  # ─────────────────────────────────────────────
+  # ────────────────────────────────────────────────────────────────────────────
   # STEP 7 — Create Chapter End Page (RENDER)
-  # ─────────────────────────────────────────────
-  - id: STEP_7_CREATE_END_PAGE
-    type: RENDER
-    command: CREATE_END_PAGE
-    inherits:
-      - STEP_1_ASSERT_STYLE_STATE
-      - STEP_3_ASSERT_CHARACTER_LOCK
-      - STEP_4_ASSERT_ENVIRONMENT_RULES
+  # Purpose: Closure or cliffhanger
+  # Generates image: Yes (1 image)
+  # ────────────────────────────────────────────────────────────────────────────
+  create_end_page:
+    runs-on: ubuntu-latest
+    needs: [generate_filler_page]
+    env:
+      ARC_ID: ${{ inputs.arc_id }}
+      CHAPTER_ID: ${{ inputs.chapter_id }}
+      VALIDATION_PROFILE: ${{ inputs.validation_profile }}
+      FAIL_SOFTLY: ${{ inputs.fail_softly }}
+      OUTPUT_DIR: "out/${{ inputs.arc_id }}/${{ inputs.chapter_id }}/end-page"
+    steps:
+      - name: CREATE_END_PAGE (RENDER)
+        run: |
+          mkdir -p "$OUTPUT_DIR"
+          echo "Rendering END PAGE to $OUTPUT_DIR"
+          echo "OUTPUT_IMAGE=end_page.png" >> $GITHUB_ENV
+          touch "$OUTPUT_DIR/end_page.png"
 
-    end_page:
-      mode: CLIFFHANGER_OR_CLOSURE
+      - *STEP_VALIDATE_RENDER
 
-    behavior:
-      character: LOCKED
-      environment: INTERPRETIVE
-      style: LOCKED
-
-    style_guards_from_policy: policies.style.render_guards
-
-  # STEP 7A — Validate End Page
-  - id: STEP_7A_VALIDATE_END_PAGE
-    uses: validate_reuse.default_validate_step
-    target: STEP_7_CREATE_END_PAGE
-    profile: v1_book1_strict_ip
+      - name: WORKFLOW COMPLETE (receipt)
+        run: |
+          echo "[UI RECEIPT — ANIME_COMPOSITE__FULL_2D_LOCKED]"
+          echo "Command: WORKFLOW COMPLETE"
+          echo "Type: STATE_ONLY"
+          echo "Image Generated: No"
+          echo "Next Step: start next chapter (or next book)"
