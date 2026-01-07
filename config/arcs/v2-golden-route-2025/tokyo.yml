@@ -8,4 +8,4 @@ arc:
     - GENERIC_TRAIN_FORMS
     - GENERIC_CITY_SIGNS_GLYPHS
     - ABSTRACT_NEON_SHAPES
-  environment_avoid:
+  validate_profile: v2_golden_route_strict_ip

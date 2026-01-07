@@ -1,0 +1,37 @@
+validate_profiles:
+  v1_book1_strict_ip:
+    checks:
+      character_integrity_forbid:
+        - FACE_SHAPE_CHANGE
+        - IDENTITY_DRIFT
+        - AGE_SHIFT
+        - AGE_REGRESSION
+        - YOUTHENING
+
+      ip_integrity_forbid:
+        - ANY_LOGOS
+        - ANY_BRAND_MARKS
+        - ANY_RECOGNIZABLE_MASCOTS
+        - ANY_RECOGNIZABLE_CHARACTERS
+        - AIRLINE_LIVERIES
+        - TAIL_LOGOS
+        - BRAND_WORDMARKS
+
+  v2_cherry_blossom_soft_tone:
+    checks:
+      character_integrity_forbid:
+        - FACE_SHAPE_CHANGE
+        - IDENTITY_DRIFT
+        - AGE_SHIFT
+        - AGE_REGRESSION
+        - YOUTHENING
+
+      # (optional) still forbid logos/brands even if tone is softer
+      ip_integrity_forbid:
+        - ANY_LOGOS
+        - ANY_BRAND_MARKS
+        - ANY_RECOGNIZABLE_MASCOTS
+        - ANY_RECOGNIZABLE_CHARACTERS
+        - AIRLINE_LIVERIES
+        - TAIL_LOGOS
+        - BRAND_WORDMARKS
