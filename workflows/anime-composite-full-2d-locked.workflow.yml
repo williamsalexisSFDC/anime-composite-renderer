@@ -215,85 +215,42 @@ jobs:
           name: start-page-attempt1
           path: out/start-page
 
-      # Attempt 1 validation — SOFT FAIL (job continues)
-      - name: Validate START PAGE (Attempt 1) — soft fail
-        id: validate_1
-        continue-on-error: true
+      # ✅ NEW: centralized validate+retry logic
+      - name: VALIDATE + Retry (START PAGE)
+        env:
+          VALIDATION_PROFILES_FILE: ${{ env.VALIDATION_PROFILES_FILE }}
+          VALIDATE_PROFILE: ${{ env.VALIDATE_PROFILE }}
+          FAIL_SOFTLY: ${{ env.FAIL_SOFTLY }}
+          MAX_RETRIES: ${{ env.MAX_RETRIES }}
+
+          ATTEMPT1_IMAGE: out/start-page/start-page.attempt1.png
+          OUT_DIR: out/start-page/validated
+          ATTEMPT2_IMAGE: out/start-page/validated/attempt2.png
+
+          RERENDER_CMD: >
+            renderer create-start-page
+            --book "$CONFIG_BOOK"
+            --arc "$CONFIG_ARC"
+            --profiles "$VALIDATION_PROFILES_FILE"
+            --profile "$VALIDATE_PROFILE"
+            --text-language "$TEXT_LANGUAGE_MODE"
+            --location-hint ""
+            --override "CAPTION_VARIANCE=NONE"
+            --override "ALLOW_REAL_PLACE_NAMES=FALSE"
+            --override "LOCATION_POLICY=GENERIC_ONLY"
+            --override "ENVIRONMENT_SIMPLIFICATION=VERY_HIGH"
+            --override "NO_YOUTHENING=TRUE"
+            --out "out/start-page/validated/attempt2.png"
         run: |
-          mkdir -p out/reports
-          validator validate \
-            --profiles "$VALIDATION_PROFILES_FILE" \
-            --profile "$VALIDATE_PROFILE" \
-            --image "out/start-page/start-page.attempt1.png" \
-            --report "out/reports/start-page.attempt1.json"
+          chmod +x tools/validate_and_retry.sh
+          tools/validate_and_retry.sh
 
-      # Gate retry decision
-      - name: Gate retry (START PAGE)
-        id: gate
-        run: |
-          # Default: no retry
-          SHOULD_RETRY=false
-
-          # If fail_softly is true AND MAX_RETRIES >= 1 AND report indicates failure -> retry
-          if [ "$FAIL_SOFTLY" = "true" ] && [ "$MAX_RETRIES" -ge 1 ]; then
-            if [ -f "out/reports/start-page.attempt1.json" ]; then
-              PASSED=$(jq -r '.passed' out/reports/start-page.attempt1.json 2>/dev/null || echo "false")
-              if [ "$PASSED" != "true" ]; then
-                SHOULD_RETRY=true
-              fi
-            else
-              SHOULD_RETRY=true
-            fi
-          fi
-
-          echo "SHOULD_RETRY=$SHOULD_RETRY" >> $GITHUB_OUTPUT
-
-      # Attempt 2 render — tightened abstraction + lower variance
-      - name: Re-render START PAGE (Attempt 2 / Tightened)
-        if: steps.gate.outputs.SHOULD_RETRY == 'true'
-        run: |
-          mkdir -p out/start-page
-          renderer create-start-page \
-            --book "$CONFIG_BOOK" \
-            --arc "$CONFIG_ARC" \
-            --profiles "$VALIDATION_PROFILES_FILE" \
-            --profile "$VALIDATE_PROFILE" \
-            --text-language "$TEXT_LANGUAGE_MODE" \
-            --location-hint "" \
-            --override "CAPTION_VARIANCE=NONE" \
-            --override "ALLOW_REAL_PLACE_NAMES=FALSE" \
-            --override "LOCATION_POLICY=GENERIC_ONLY" \
-            --override "ENVIRONMENT_SIMPLIFICATION=VERY_HIGH" \
-            --override "NO_YOUTHENING=TRUE" \
-            --out "out/start-page/start-page.attempt2.png"
-
-      # Attempt 2 validation — HARD FAIL (if it fails now, stop)
-      - name: Validate START PAGE (Attempt 2) — hard fail
-        if: steps.gate.outputs.SHOULD_RETRY == 'true'
-        run: |
-          validator validate \
-            --profiles "$VALIDATION_PROFILES_FILE" \
-            --profile "$VALIDATE_PROFILE" \
-            --image "out/start-page/start-page.attempt2.png" \
-            --report "out/reports/start-page.attempt2.json"
-
-      # Select final artifact
-      - name: Select START PAGE final
-        run: |
-          mkdir -p out/final
-          if [ -f "out/start-page/start-page.attempt2.png" ]; then
-            cp "out/start-page/start-page.attempt2.png" "out/final/start-page.final.png"
-            cp "out/reports/start-page.attempt2.json" "out/final/start-page.final.validate.json" || true
-          else
-            cp "out/start-page/start-page.attempt1.png" "out/final/start-page.final.png"
-            cp "out/reports/start-page.attempt1.json" "out/final/start-page.final.validate.json" || true
-          fi
-
+      # ✅ Update upload to use the script's final output
       - name: Upload START PAGE final
         uses: actions/upload-artifact@v4
         with:
           name: start-page-final
-          path: out/final/start-page.final.png
+          path: out/start-page/validated/final.png
 
   # ─────────────────────────────────────────────
   # RENDER — NARRATIVE PAGE (Attempt 1 only)
@@ -335,78 +292,58 @@ jobs:
   # Publishes: manga-page-final
   # ─────────────────────────────────────────────
   validate_manga_page:
-    runs-on: ubuntu-latest
-    needs: [render_manga_page]
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+  runs-on: ubuntu-latest
+  needs: [render_manga_page]
+  steps:
+    - name: Checkout
+      uses: actions/checkout@v4
 
-      - name: Download MANGA PAGE (attempt1)
-        uses: actions/download-artifact@v4
-        with:
-          name: manga-page-attempt1
-          path: out/manga-page
+    # Needed if your manga page render depends on the validated start page lock context
+    - name: Download START PAGE final (lock context)
+      uses: actions/download-artifact@v4
+      with:
+        name: start-page-final
+        path: out/locked
 
-      - name: Validate MANGA PAGE (Attempt 1) — soft fail
-        id: validate_1
-        continue-on-error: true
-        run: |
-          mkdir -p out/reports
-          validator validate \
-            --profiles "$VALIDATION_PROFILES_FILE" \
-            --profile "$VALIDATE_PROFILE" \
-            --image "out/manga-page/manga-page.attempt1.png" \
-            --report "out/reports/manga-page.attempt1.json"
+    - name: Download MANGA PAGE (attempt1)
+      uses: actions/download-artifact@v4
+      with:
+        name: manga-page-attempt1
+        path: out/manga-page
 
-      - name: Gate retry (MANGA PAGE)
-        id: gate
-        run: |
-          SHOULD_RETRY=false
-          if [ "$FAIL_SOFTLY" = "true" ] && [ "$MAX_RETRIES" -ge 1 ]; then
-            PASSED=$(jq -r '.passed' out/reports/manga-page.attempt1.json 2>/dev/null || echo "false")
-            if [ "$PASSED" != "true" ]; then
-              SHOULD_RETRY=true
-            fi
-          fi
-          echo "SHOULD_RETRY=$SHOULD_RETRY" >> $GITHUB_OUTPUT
+    # ✅ Centralized validate+retry logic
+    - name: VALIDATE + Retry (MANGA PAGE)
+      env:
+        VALIDATION_PROFILES_FILE: ${{ env.VALIDATION_PROFILES_FILE }}
+        VALIDATE_PROFILE: ${{ env.VALIDATE_PROFILE }}
+        FAIL_SOFTLY: ${{ env.FAIL_SOFTLY }}
+        MAX_RETRIES: ${{ env.MAX_RETRIES }}
 
-      - name: Re-render MANGA PAGE (Attempt 2 / Tightened)
-        if: steps.gate.outputs.SHOULD_RETRY == 'true'
-        run: |
-          renderer generate-manga-page \
-            --book "$CONFIG_BOOK" \
-            --arc "$CONFIG_ARC" \
-            --profiles "$VALIDATION_PROFILES_FILE" \
-            --profile "$VALIDATE_PROFILE" \
-            --override "CAPTION_VARIANCE=NONE" \
-            --override "ALLOW_REAL_PLACE_NAMES=FALSE" \
-            --override "ENVIRONMENT_SIMPLIFICATION=VERY_HIGH" \
-            --override "NO_YOUTHENING=TRUE" \
-            --out "out/manga-page/manga-page.attempt2.png"
+        ATTEMPT1_IMAGE: out/manga-page/manga-page.attempt1.png
+        OUT_DIR: out/manga-page/validated
+        ATTEMPT2_IMAGE: out/manga-page/validated/attempt2.png
 
-      - name: Validate MANGA PAGE (Attempt 2) — hard fail
-        if: steps.gate.outputs.SHOULD_RETRY == 'true'
-        run: |
-          validator validate \
-            --profiles "$VALIDATION_PROFILES_FILE" \
-            --profile "$VALIDATE_PROFILE" \
-            --image "out/manga-page/manga-page.attempt2.png" \
-            --report "out/reports/manga-page.attempt2.json"
+        RERENDER_CMD: >
+          renderer generate-manga-page
+          --book "$CONFIG_BOOK"
+          --arc "$CONFIG_ARC"
+          --profiles "$VALIDATION_PROFILES_FILE"
+          --profile "$VALIDATE_PROFILE"
+          --locked-start "out/locked/start-page.final.png"
+          --override "CAPTION_VARIANCE=NONE"
+          --override "ALLOW_REAL_PLACE_NAMES=FALSE"
+          --override "ENVIRONMENT_SIMPLIFICATION=VERY_HIGH"
+          --override "NO_YOUTHENING=TRUE"
+          --out "out/manga-page/validated/attempt2.png"
+      run: |
+        chmod +x tools/validate_and_retry.sh
+        tools/validate_and_retry.sh
 
-      - name: Select MANGA PAGE final
-        run: |
-          mkdir -p out/final
-          if [ -f "out/manga-page/manga-page.attempt2.png" ]; then
-            cp "out/manga-page/manga-page.attempt2.png" "out/final/manga-page.final.png"
-          else
-            cp "out/manga-page/manga-page.attempt1.png" "out/final/manga-page.final.png"
-          fi
-
-      - name: Upload MANGA PAGE final
-        uses: actions/upload-artifact@v4
-        with:
-          name: manga-page-final
-          path: out/final/manga-page.final.png
+    - name: Upload MANGA PAGE final
+      uses: actions/upload-artifact@v4
+      with:
+        name: manga-page-final
+        path: out/manga-page/validated/final.png
 
   # ─────────────────────────────────────────────
   # RENDER — FILLER PAGE (Attempt 1 only)
@@ -440,78 +377,50 @@ jobs:
   # Publishes: filler-page-final
   # ─────────────────────────────────────────────
   validate_filler_page:
-    runs-on: ubuntu-latest
-    needs: [render_filler_page]
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+  runs-on: ubuntu-latest
+  needs: [render_filler_page]
+  steps:
+    - name: Checkout
+      uses: actions/checkout@v4
 
-      - name: Download FILLER PAGE (attempt1)
-        uses: actions/download-artifact@v4
-        with:
-          name: filler-page-attempt1
-          path: out/filler-page
+    - name: Download FILLER PAGE (attempt1)
+      uses: actions/download-artifact@v4
+      with:
+        name: filler-page-attempt1
+        path: out/filler-page
 
-      - name: Validate FILLER PAGE (Attempt 1) — soft fail
-        id: validate_1
-        continue-on-error: true
-        run: |
-          mkdir -p out/reports
-          validator validate \
-            --profiles "$VALIDATION_PROFILES_FILE" \
-            --profile "$VALIDATE_PROFILE" \
-            --image "out/filler-page/filler-page.attempt1.png" \
-            --report "out/reports/filler-page.attempt1.json"
+    # ✅ Centralized validate+retry logic (script)
+    - name: VALIDATE + Retry (FILLER PAGE)
+      env:
+        VALIDATION_PROFILES_FILE: ${{ env.VALIDATION_PROFILES_FILE }}
+        VALIDATE_PROFILE: ${{ env.VALIDATE_PROFILE }}
+        FAIL_SOFTLY: ${{ env.FAIL_SOFTLY }}
+        MAX_RETRIES: ${{ env.MAX_RETRIES }}
 
-      - name: Gate retry (FILLER PAGE)
-        id: gate
-        run: |
-          SHOULD_RETRY=false
-          if [ "$FAIL_SOFTLY" = "true" ] && [ "$MAX_RETRIES" -ge 1 ]; then
-            PASSED=$(jq -r '.passed' out/reports/filler-page.attempt1.json 2>/dev/null || echo "false")
-            if [ "$PASSED" != "true" ]; then
-              SHOULD_RETRY=true
-            fi
-          fi
-          echo "SHOULD_RETRY=$SHOULD_RETRY" >> $GITHUB_OUTPUT
+        ATTEMPT1_IMAGE: out/filler-page/filler-page.attempt1.png
+        OUT_DIR: out/filler-page/validated
+        ATTEMPT2_IMAGE: out/filler-page/validated/attempt2.png
 
-      - name: Re-render FILLER PAGE (Attempt 2 / Tightened)
-        if: steps.gate.outputs.SHOULD_RETRY == 'true'
-        run: |
-          renderer generate-filler-page \
-            --book "$CONFIG_BOOK" \
-            --arc "$CONFIG_ARC" \
-            --profiles "$VALIDATION_PROFILES_FILE" \
-            --profile "$VALIDATE_PROFILE" \
-            --override "CAPTION_VARIANCE=NONE" \
-            --override "ALLOW_REAL_PLACE_NAMES=FALSE" \
-            --override "ENVIRONMENT_SIMPLIFICATION=VERY_HIGH" \
-            --override "NO_YOUTHENING=TRUE" \
-            --out "out/filler-page/filler-page.attempt2.png"
+        RERENDER_CMD: >
+          renderer generate-filler-page
+          --book "$CONFIG_BOOK"
+          --arc "$CONFIG_ARC"
+          --profiles "$VALIDATION_PROFILES_FILE"
+          --profile "$VALIDATE_PROFILE"
+          --override "CAPTION_VARIANCE=NONE"
+          --override "ALLOW_REAL_PLACE_NAMES=FALSE"
+          --override "ENVIRONMENT_SIMPLIFICATION=VERY_HIGH"
+          --override "NO_YOUTHENING=TRUE"
+          --out "out/filler-page/validated/attempt2.png"
+      run: |
+        chmod +x tools/validate_and_retry.sh
+        tools/validate_and_retry.sh
 
-      - name: Validate FILLER PAGE (Attempt 2) — hard fail
-        if: steps.gate.outputs.SHOULD_RETRY == 'true'
-        run: |
-          validator validate \
-            --profiles "$VALIDATION_PROFILES_FILE" \
-            --profile "$VALIDATE_PROFILE" \
-            --image "out/filler-page/filler-page.attempt2.png" \
-            --report "out/reports/filler-page.attempt2.json"
-
-      - name: Select FILLER PAGE final
-        run: |
-          mkdir -p out/final
-          if [ -f "out/filler-page/filler-page.attempt2.png" ]; then
-            cp "out/filler-page/filler-page.attempt2.png" "out/final/filler-page.final.png"
-          else
-            cp "out/filler-page/filler-page.attempt1.png" "out/final/filler-page.final.png"
-          fi
-
-      - name: Upload FILLER PAGE final
-        uses: actions/upload-artifact@v4
-        with:
-          name: filler-page-final
-          path: out/final/filler-page.final.png
+    - name: Upload FILLER PAGE final
+      uses: actions/upload-artifact@v4
+      with:
+        name: filler-page-final
+        path: out/filler-page/validated/final.png
 
   # ─────────────────────────────────────────────
   # RENDER — END PAGE (Attempt 1 only)
@@ -557,66 +466,38 @@ jobs:
           name: end-page-attempt1
           path: out/end-page
 
-      - name: Validate END PAGE (Attempt 1) — soft fail
-        id: validate_1
-        continue-on-error: true
-        run: |
-          mkdir -p out/reports
-          validator validate \
-            --profiles "$VALIDATION_PROFILES_FILE" \
-            --profile "$VALIDATE_PROFILE" \
-            --image "out/end-page/end-page.attempt1.png" \
-            --report "out/reports/end-page.attempt1.json"
+      # ✅ Centralized validate+retry logic (script)
+      - name: VALIDATE + Retry (END PAGE)
+        env:
+          VALIDATION_PROFILES_FILE: ${{ env.VALIDATION_PROFILES_FILE }}
+          VALIDATE_PROFILE: ${{ env.VALIDATE_PROFILE }}
+          FAIL_SOFTLY: ${{ env.FAIL_SOFTLY }}
+          MAX_RETRIES: ${{ env.MAX_RETRIES }}
 
-      - name: Gate retry (END PAGE)
-        id: gate
-        run: |
-          SHOULD_RETRY=false
-          if [ "$FAIL_SOFTLY" = "true" ] && [ "$MAX_RETRIES" -ge 1 ]; then
-            PASSED=$(jq -r '.passed' out/reports/end-page.attempt1.json 2>/dev/null || echo "false")
-            if [ "$PASSED" != "true" ]; then
-              SHOULD_RETRY=true
-            fi
-          fi
-          echo "SHOULD_RETRY=$SHOULD_RETRY" >> $GITHUB_OUTPUT
+          ATTEMPT1_IMAGE: out/end-page/end-page.attempt1.png
+          OUT_DIR: out/end-page/validated
+          ATTEMPT2_IMAGE: out/end-page/validated/attempt2.png
 
-      - name: Re-render END PAGE (Attempt 2 / Tightened)
-        if: steps.gate.outputs.SHOULD_RETRY == 'true'
+          RERENDER_CMD: >
+            renderer create-end-page
+            --book "$CONFIG_BOOK"
+            --arc "$CONFIG_ARC"
+            --profiles "$VALIDATION_PROFILES_FILE"
+            --profile "$VALIDATE_PROFILE"
+            --override "CAPTION_VARIANCE=NONE"
+            --override "ALLOW_REAL_PLACE_NAMES=FALSE"
+            --override "ENVIRONMENT_SIMPLIFICATION=VERY_HIGH"
+            --override "NO_YOUTHENING=TRUE"
+            --out "out/end-page/validated/attempt2.png"
         run: |
-          renderer create-end-page \
-            --book "$CONFIG_BOOK" \
-            --arc "$CONFIG_ARC" \
-            --profiles "$VALIDATION_PROFILES_FILE" \
-            --profile "$VALIDATE_PROFILE" \
-            --override "CAPTION_VARIANCE=NONE" \
-            --override "ALLOW_REAL_PLACE_NAMES=FALSE" \
-            --override "ENVIRONMENT_SIMPLIFICATION=VERY_HIGH" \
-            --override "NO_YOUTHENING=TRUE" \
-            --out "out/end-page/end-page.attempt2.png"
-
-      - name: Validate END PAGE (Attempt 2) — hard fail
-        if: steps.gate.outputs.SHOULD_RETRY == 'true'
-        run: |
-          validator validate \
-            --profiles "$VALIDATION_PROFILES_FILE" \
-            --profile "$VALIDATE_PROFILE" \
-            --image "out/end-page/end-page.attempt2.png" \
-            --report "out/reports/end-page.attempt2.json"
-
-      - name: Select END PAGE final
-        run: |
-          mkdir -p out/final
-          if [ -f "out/end-page/end-page.attempt2.png" ]; then
-            cp "out/end-page/end-page.attempt2.png" "out/final/end-page.final.png"
-          else
-            cp "out/end-page/end-page.attempt1.png" "out/final/end-page.final.png"
-          fi
+          chmod +x tools/validate_and_retry.sh
+          tools/validate_and_retry.sh
 
       - name: Upload END PAGE final
         uses: actions/upload-artifact@v4
         with:
           name: end-page-final
-          path: out/final/end-page.final.png
+          path: out/end-page/validated/final.png
 
       - name: WORKFLOW COMPLETE (receipt)
         run: |
@@ -625,3 +506,4 @@ jobs:
           echo "Type: STATE_ONLY"
           echo "Image Generated: No"
           echo "Next Step: start next chapter (or next book)"
+

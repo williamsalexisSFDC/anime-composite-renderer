@@ -17,6 +17,33 @@ validate_profiles:
         - TAIL_LOGOS
         - BRAND_WORDMARKS
 
+      style_integrity_forbid:
+        - PHOTOREALISM
+        - CGI_3D
+        - PAINTERLY
+        - COLLAGE
+        - HYBRID
+        - EXTREME_STYLE_CHANGE
+        - CARTOONISH_STYLE
+        - PIXAR_STYLE
+        - VIDEO_GAME_STYLE
+
+      relaxations:
+        allow_soft_atmosphere: true
+        allow_wider_color_variance: true
+        allow_saturation_variance: true
+        allow_brightness_variance: true
+
+        # Keep core look locked
+        allow_contrast_variance: false
+        allow_pastel_color_palette: false
+        allow_watercolor_style: false
+        allow_illustrative_style: false
+        allow_sketch_style: false
+        
+        # Explicit palette guard (optional but recommended)
+        palette_lock: ANIME_CEL_COLOR
+
   v2_cherry_blossom_soft_tone:
     checks:
       character_integrity_forbid:
@@ -26,7 +53,6 @@ validate_profiles:
         - AGE_REGRESSION
         - YOUTHENING
 
-      # (optional) still forbid logos/brands even if tone is softer
       ip_integrity_forbid:
         - ANY_LOGOS
         - ANY_BRAND_MARKS
@@ -35,3 +61,28 @@ validate_profiles:
         - AIRLINE_LIVERIES
         - TAIL_LOGOS
         - BRAND_WORDMARKS
+
+      style_integrity_forbid:
+        - PHOTOREALISM
+        - CGI_3D
+        - COLLAGE
+        - EXTREME_STYLE_CHANGE
+        - CARTOONISH_STYLE
+        - PIXAR_STYLE
+        - VIDEO_GAME_STYLE
+
+    relaxations:
+      allow_soft_atmosphere: true
+      allow_wider_color_variance: true
+      allow_saturation_variance: true
+      allow_brightness_variance: true
+
+      # Keep core look locked
+      allow_contrast_variance: false
+      allow_pastel_color_palette: false
+      allow_watercolor_style: false
+      allow_illustrative_style: false
+      allow_sketch_style: false
+
+      # Explicit palette guard (optional but recommended)
+      palette_lock: ANIME_CEL_COLOR
