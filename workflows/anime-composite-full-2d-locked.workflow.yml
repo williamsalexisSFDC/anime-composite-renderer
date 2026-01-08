@@ -68,7 +68,6 @@ name: ANIME_COMPOSITE__FULL_2D_LOCKED
         required: false
         default: ""
 
-
 env:
   # Global retry policy (validate jobs use this)
   MAX_RETRIES: "1"
