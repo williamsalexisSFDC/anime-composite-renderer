@@ -245,7 +245,7 @@ jobs:
             --profiles "$VALIDATION_PROFILES_FILE"
             --profile "$VALIDATE_PROFILE"
             --text-language "$TEXT_LANGUAGE_MODE"
-            --location-hint ""
+            --location-hint "$LOCATION_HINT"
             --override "CAPTION_VARIANCE=NONE"
             --override "ALLOW_REAL_PLACE_NAMES=FALSE"
             --override "LOCATION_POLICY=GENERIC_ONLY"
@@ -256,16 +256,17 @@ jobs:
           chmod +x tools/validate_and_retry.sh
           tools/validate_and_retry.sh
 
+      - name: Normalize START PAGE final filename
+        run: |
+          mkdir -p out/start-page/validated
+          cp out/start-page/validated/final.png out/start-page/validated/start-page.final.png
+      
       # ✅ Update upload to use the script's final output
       - name: Upload START PAGE final
         uses: actions/upload-artifact@v4
         with:
           name: start-page-final
-          path: out/start-page/validated/final.png
-      
-      - name: Normalize START PAGE final filename
-        run: |
-          cp out/start-page/validated/final.png out/start-page/validated/start-page.final.png
+          path: out/start-page/validated/start-page.final.png
   
   # ─────────────────────────────────────────────
   # RENDER — IMPACT PAGE (Attempt 1 + retry)
@@ -294,7 +295,7 @@ jobs:
 
           renderer render-specialty-page \
             --specialty impact_frame \
-            --render-mode sandbox_readonly \
+            --assert-invariant specialty_pages_sandbox_readonly \
             --book "$CONFIG_BOOK" \
             --arc "$CONFIG_ARC" \
             --profiles "$VALIDATION_PROFILES_FILE" \
@@ -326,9 +327,11 @@ jobs:
         env:
           # Use override if provided; else fall back to default
           VALIDATION_PROFILES_FILE: ${{ env.VALIDATION_PROFILES_FILE }}
-          VALIDATE_PROFILE: ${{ env.VALIDATE_PROFILE }}
           FAIL_SOFTLY: ${{ env.FAIL_SOFTLY }}
           MAX_RETRIES: ${{ env.MAX_RETRIES }}
+
+          IMPACT_VALIDATE_PROFILE: ${{ env.IMPACT_VALIDATE_PROFILE }}
+          DEFAULT_VALIDATE_PROFILE: ${{ env.VALIDATE_PROFILE }}
 
           ATTEMPT1_IMAGE: out/impact-page/impact-page.attempt1.png
           OUT_DIR: out/impact-page/validated
@@ -339,18 +342,25 @@ jobs:
           RERENDER_CMD: >
             renderer render-specialty-page
             --specialty impact_frame
-            --render-mode sandbox_readonly
+            --assert-invariant specialty_pages_sandbox_readonly
             --book "$CONFIG_BOOK"
             --arc "$CONFIG_ARC"
             --profiles "$VALIDATION_PROFILES_FILE"
-            --profile "${IMPACT_VALIDATE_PROFILE:-$VALIDATE_PROFILE}"
+            --profile "$EFFECTIVE_PROFILE"
             --override "color_mode=MONOCHROME_HIGH_CONTRAST"
             --override "contrast=VERY_HIGH"
             --override "motion_language=DENSE_SPEED_LINES,INK_BURSTS,ABSTRACT_MOTION_BG"
             --out "out/impact-page/validated/attempt2.png"
         run: |
-          # Resolve profile override (bash parameter expansion won't occur inside env string above)
-          export VALIDATE_PROFILE="${IMPACT_VALIDATE_PROFILE:-$VALIDATE_PROFILE}"
+          # Resolve profile override deterministically
+          EFFECTIVE_PROFILE="$DEFAULT_VALIDATE_PROFILE"
+          if [ -n "$IMPACT_VALIDATE_PROFILE" ]; then
+            EFFECTIVE_PROFILE="$IMPACT_VALIDATE_PROFILE"
+          fi
+          export EFFECTIVE_PROFILE
+
+          # The validation script requires VALIDATE_PROFILE (profile key) to validate attempt1 too
+          export VALIDATE_PROFILE="$EFFECTIVE_PROFILE"
 
           chmod +x tools/validate_and_retry.sh
           tools/validate_and_retry.sh
@@ -402,58 +412,58 @@ jobs:
   # Publishes: manga-page-final
   # ─────────────────────────────────────────────
   validate_manga_page:
-  runs-on: ubuntu-latest
-  needs: [render_manga_page]
-  steps:
-    - name: Checkout
-      uses: actions/checkout@v4
+    runs-on: ubuntu-latest
+    needs: [render_manga_page]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      
+      # Needed if your manga page render depends on the validated start page lock context
+      - name: Download START PAGE final (lock context)
+        uses: actions/download-artifact@v4
+        with:
+          name: start-page-final
+          path: out/locked
 
-    # Needed if your manga page render depends on the validated start page lock context
-    - name: Download START PAGE final (lock context)
-      uses: actions/download-artifact@v4
-      with:
-        name: start-page-final
-        path: out/locked
+      - name: Download MANGA PAGE (attempt1)
+        uses: actions/download-artifact@v4
+        with:
+          name: manga-page-attempt1
+          path: out/manga-page
 
-    - name: Download MANGA PAGE (attempt1)
-      uses: actions/download-artifact@v4
-      with:
-        name: manga-page-attempt1
-        path: out/manga-page
+      # ✅ Centralized validate+retry logic
+      - name: VALIDATE + Retry (MANGA PAGE)
+        env:
+          VALIDATION_PROFILES_FILE: ${{ env.VALIDATION_PROFILES_FILE }}
+          VALIDATE_PROFILE: ${{ env.VALIDATE_PROFILE }}
+          FAIL_SOFTLY: ${{ env.FAIL_SOFTLY }}
+          MAX_RETRIES: ${{ env.MAX_RETRIES }}
 
-    # ✅ Centralized validate+retry logic
-    - name: VALIDATE + Retry (MANGA PAGE)
-      env:
-        VALIDATION_PROFILES_FILE: ${{ env.VALIDATION_PROFILES_FILE }}
-        VALIDATE_PROFILE: ${{ env.VALIDATE_PROFILE }}
-        FAIL_SOFTLY: ${{ env.FAIL_SOFTLY }}
-        MAX_RETRIES: ${{ env.MAX_RETRIES }}
+          ATTEMPT1_IMAGE: out/manga-page/manga-page.attempt1.png
+          OUT_DIR: out/manga-page/validated
+          ATTEMPT2_IMAGE: out/manga-page/validated/attempt2.png
 
-        ATTEMPT1_IMAGE: out/manga-page/manga-page.attempt1.png
-        OUT_DIR: out/manga-page/validated
-        ATTEMPT2_IMAGE: out/manga-page/validated/attempt2.png
+          RERENDER_CMD: >
+            renderer generate-manga-page
+            --book "$CONFIG_BOOK"
+            --arc "$CONFIG_ARC"
+            --profiles "$VALIDATION_PROFILES_FILE"
+            --profile "$VALIDATE_PROFILE"
+            --locked-start "out/locked/start-page.final.png"
+            --override "CAPTION_VARIANCE=NONE"
+            --override "ALLOW_REAL_PLACE_NAMES=FALSE"
+            --override "ENVIRONMENT_SIMPLIFICATION=VERY_HIGH"
+            --override "NO_YOUTHENING=TRUE"
+            --out "out/manga-page/validated/attempt2.png"
+        run: |
+          chmod +x tools/validate_and_retry.sh
+          tools/validate_and_retry.sh
 
-        RERENDER_CMD: >
-          renderer generate-manga-page
-          --book "$CONFIG_BOOK"
-          --arc "$CONFIG_ARC"
-          --profiles "$VALIDATION_PROFILES_FILE"
-          --profile "$VALIDATE_PROFILE"
-          --locked-start "out/locked/start-page.final.png"
-          --override "CAPTION_VARIANCE=NONE"
-          --override "ALLOW_REAL_PLACE_NAMES=FALSE"
-          --override "ENVIRONMENT_SIMPLIFICATION=VERY_HIGH"
-          --override "NO_YOUTHENING=TRUE"
-          --out "out/manga-page/validated/attempt2.png"
-      run: |
-        chmod +x tools/validate_and_retry.sh
-        tools/validate_and_retry.sh
-
-    - name: Upload MANGA PAGE final
-      uses: actions/upload-artifact@v4
-      with:
-        name: manga-page-final
-        path: out/manga-page/validated/final.png
+      - name: Upload MANGA PAGE final
+        uses: actions/upload-artifact@v4
+        with:
+          name: manga-page-final
+          path: out/manga-page/validated/final.png
 
   # ─────────────────────────────────────────────
   # RENDER — FILLER PAGE (Attempt 1 only)
